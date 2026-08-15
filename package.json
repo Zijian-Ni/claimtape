@@ -1,0 +1,40 @@
+{
+  "name": "claimtape",
+  "version": "1.0.0",
+  "description": "Did the AI actually prove that? Offline claim-by-claim trust reporter for AI answers.",
+  "private": false,
+  "license": "MIT",
+  "keywords": [
+    "ai",
+    "verification",
+    "trust",
+    "fact-check",
+    "llm",
+    "hallucination",
+    "offline",
+    "browser-tool"
+  ],
+  "homepage": "https://github.com/Zijian-Ni/claimtape",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Zijian-Ni/claimtape"
+  },
+  "bugs": {
+    "url": "https://github.com/Zijian-Ni/claimtape/issues"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "echo 'No lint configured yet'",
+    "test": "node tests/analyzer.test.js"
+  },
+  "devDependencies": {
+    "vite": "^5.4.14"
+  },
+  "allowScripts": {
+    "esbuild@0.21.5": true
+  },
+  "type": "module",
+  "author": "Zijian Ni <xiaoni112233@outlook.com>"
+}
