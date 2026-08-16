@@ -74,15 +74,19 @@ export function splitIntoClaims(text) {
 }
 
 function classifyKind(claim) {
-  const isOpinion = OPINION_RE.test(claim) && !/已经|已上线|测试通过|准确率为|发布于/.test(claim);
+  // Operational / measurable claims are factual even without digits
+  if (/\b(production|staging|deployed|running|live|coverage|latency|bug|bugs|error|errors|tests?|pipeline|ci\/cd|checks?\s+are\s+green|operational|passed|failed)\b|已上线|已部署|生产|测试通过|覆盖率|零延迟/i.test(claim)) {
+    return 'factual';
+  }
+  const isFactish = FACTISH_RE.test(claim) || (/\b(is|are|was|were|has|have)\b/i.test(claim) && /\d/.test(claim)) || /\d/.test(claim);
+  if (isFactish) return 'factual';
+  if (/^CODE:/.test(claim) || /┌|│|└/.test(claim)) return 'framework';
+  const isOpinion = OPINION_RE.test(claim);
   const isHedge = HEDGE_RE.test(claim);
-  const isFactish = FACTISH_RE.test(claim) || /\b(is|are|was|were|has|have)\b/i.test(claim) && /\d/.test(claim);
-  const isAbsolute = ABSOLUTE_RE.test(claim);
   if (isOpinion && !isFactish) return 'opinion';
-  if (isHedge && !isFactish) return 'assessment';
-  if (isFactish || /\d/.test(claim)) return 'factual';
-  if (/^CODE:/.test(claim) || /┌|│|└|架构|核心/.test(claim)) return 'framework';
-  return isOpinion ? 'opinion' : 'assessment';
+  if (isHedge) return 'assessment';
+  if (/架构|核心|模块|建议|应该|可以|路径/.test(claim)) return 'opinion';
+  return 'assessment';
 }
 
 function normNum(n) {
@@ -191,11 +195,33 @@ const RISKS = [
 
 function claimRisks(claim) { return RISKS.filter(r => r.re.test(claim)).map(r => r.id); }
 
+function metricFamily(claimCtx, key = '', unit = '') {
+  const s = `${claimCtx} ${key} ${unit}`.toLowerCase();
+  if (/cost|price|usd|dollar|节省|成本|费用|api_cost|reduction/.test(s)) return 'cost';
+  if (/cover|覆盖/.test(s)) return 'coverage';
+  if (/accur|precision|recall|f1|准确/.test(s)) return 'accuracy';
+  if (/latency|p99|p95|p50|delay|ms\b|耗时|延迟/.test(s)) return 'latency';
+  if (/pass|fail|error|bug|test|suite|checks?/.test(s)) return 'tests';
+  if (/concurrent|qps|rps|load|用户/.test(s)) return 'load';
+  if (/%|percent|rate|ratio/.test(s)) return 'ratio';
+  return 'generic';
+}
+
+function asPercent(value, unit, key = '') {
+  if (unit === '%-fraction' || (unit !== '%' && value != null && value >= 0 && value <= 1 && /accur|rate|ratio|reduction|cover/i.test(key))) {
+    return value * 100;
+  }
+  if (unit === '%' || /%/.test(String(unit))) return value;
+  return value;
+}
+
 function scoreFact(claim, claimToks, claimNums, fact) {
   let score = 0;
   const matchedTokens = [];
   const matchedNums = [];
   const conflicts = [];
+  const claimFamilyHints = metricFamily(claim);
+
   for (const tok of claimToks) {
     for (const c of expand(tok)) {
       if (fact.tokens.has(c) || fact.text.toLowerCase().includes(c)) {
@@ -205,20 +231,45 @@ function scoreFact(claim, claimToks, claimNums, fact) {
       }
     }
   }
+
   for (const cn of claimNums.filter(n => !n.derived)) {
+    // Infer claim number family from surrounding claim text + unit
+    const cFamily = metricFamily(`${claim} ${cn.unit} ${cn.raw}`, '', cn.unit);
     let best = null;
     for (const fn of fact.nums) {
+      const fFamily = metricFamily(claim, fn.key, fn.unit);
+      // HARD RULE: never align cost% to coverage% etc.
+      if (cFamily !== 'generic' && fFamily !== 'generic' && cFamily !== fFamily) {
+        // same numeric coincidence is NOT support
+        const cv = asPercent(cn.value, cn.unit, cFamily);
+        const fv = asPercent(fn.value, fn.unit, fn.key);
+        if (Math.abs(cv - fv) <= Math.max(1, Math.abs(cv) * 0.05)) {
+          // near number but wrong family → conflict signal when claim is specific percent
+          if (cn.unit === '%' || cFamily === 'cost' || cFamily === 'coverage' || cFamily === 'accuracy') {
+            conflicts.push({
+              claim: cn.raw,
+              evidence: `${fn.key}=${fn.value}`,
+              detail: `数值接近但指标家族不同：claim(${cFamily}) vs evidence(${fFamily}:${fn.key})`,
+            });
+            score -= 2;
+          }
+        }
+        continue;
+      }
+
       let fv = fn.value;
-      const cv = cn.value;
-      if ((cn.unit === '%' || /%/.test(cn.raw)) && fn.unit === '%-fraction') fv = fv * 100;
+      let cv = cn.value;
+      // normalize percent-like pairs only within family
+      if ((cn.unit === '%' || /%/.test(cn.raw) || cFamily === 'accuracy' || cFamily === 'coverage' || cFamily === 'cost') && (fn.unit === '%-fraction' || (fv <= 1 && fv >= 0 && /accur|rate|ratio|reduction|cover/i.test(fn.key)))) {
+        fv = fv <= 1 ? fv * 100 : fv;
+      }
       const rel = Math.abs(fv - cv);
       const tol = Math.max(0.051, Math.abs(cv) * 0.02);
       if (rel <= tol) {
-        const s = 6 + (cn.unit === '%' ? 1 : 0);
-        if (!best || s > best.s) best = { s, fn };
-      } else if ((cn.unit === '%' || cn.value >= 95) && /cover|accura|pass|success|rate|reduction/i.test(fn.key + String(fn.unit))) {
-        const ev = fn.unit === '%-fraction' ? fv * (fv <= 1 ? 100 : 1) : fv;
-        const evN = fn.unit === '%-fraction' ? fn.value * 100 : fn.value;
+        const s = 7 + (cn.unit === '%' ? 1 : 0) + (cFamily === fFamily && cFamily !== 'generic' ? 2 : 0);
+        if (!best || s > best.s) best = { s, fn, cFamily, fFamily };
+      } else if ((cn.unit === '%' || cn.value >= 95) && cFamily === fFamily && (cFamily === 'coverage' || cFamily === 'accuracy' || cFamily === 'tests')) {
+        const evN = (fn.unit === '%-fraction' || (fn.value <= 1 && /accur|cover|rate/i.test(fn.key))) ? fn.value * 100 : fn.value;
         if (cv >= 95 && evN < 95) {
           conflicts.push({ claim: cn.raw, evidence: `${fn.key}=${fn.value}`, detail: `claimed ${cn.raw} but evidence has ${fn.key}=${fn.value}` });
           score -= 4;
@@ -227,12 +278,16 @@ function scoreFact(claim, claimToks, claimNums, fact) {
     }
     if (best) {
       score += best.s;
-      matchedNums.push({ claim: cn.raw, evidence: `${best.fn.key}=${best.fn.value}` });
+      matchedNums.push({ claim: cn.raw, evidence: `${best.fn.key}=${best.fn.value}`, family: best.cFamily });
     }
   }
+
   const fieldStr = Object.keys(fact.fields).join(' ').toLowerCase();
-  if (/deploy|production|staging/.test(claim.toLowerCase()) && /deploy|environment|production|staging/.test(fieldStr)) score += 1.5;
+  if (/deploy|production|staging/.test(claim.toLowerCase()) && /deploy|environment|production|staging/.test(fieldStr)) score += 2;
   if (/test|coverage|pass/.test(claim.toLowerCase()) && /test|pass|fail|coverage|suite/.test(fieldStr)) score += 1.5;
+  if (/cost|api/.test(claim.toLowerCase()) && /cost|reduction|api_cost/.test(fieldStr + fact.text.toLowerCase())) score += 2.5;
+  if (/pipeline|bilibili|youtube|ci\/cd|checks/.test(claim.toLowerCase()) && /pipeline|bilibili|youtube|ci|status|feed/.test(fieldStr + fact.text.toLowerCase())) score += 2;
+  if (/latency|concurrent|load/.test(claim.toLowerCase()) && /latency|concurrent|load|p99|errors/.test(fieldStr)) score += 2;
   return { score, matchedTokens: [...new Set(matchedTokens)], matchedNums, conflicts, fact };
 }
 
@@ -305,8 +360,8 @@ function classifyWithEvidence(claim, evidence) {
   const conflictSignals = [];
   const evidenceSnippets = [];
 
-  // Opinions with evidence still usually not "supported" by logs — unless explicitly about measured things
-  if ((kind === 'opinion' || kind === 'framework') && !claimNums.length && !/pass|deploy|coverage|latency|bug|error|准确|覆盖|上线|测试/i.test(claim)) {
+  // Only pure design/advice sentences skip evidence matching
+  if ((kind === 'opinion' || kind === 'framework') && !claimNums.length && !/pass|deploy|coverage|latency|bug|error|准确|覆盖|上线|测试|production|staging|pipeline|ci\/cd|operational|running|implemented/i.test(claim)) {
     reasons.push('建议/架构类内容：证据日志通常无法直接证实或证伪');
     return pack('opinion', { kind, risks, reasons, confidence: 0.55 });
   }
@@ -346,18 +401,89 @@ function classifyWithEvidence(claim, evidence) {
   }
 
   if (/\bproduction\b|生产|已上线/i.test(claim) && !/staging/i.test(claim)) {
-    const hasProd = evidence.facts.some(f => /production|prod|live/i.test(f.text));
-    const hasStaging = evidence.facts.some(f => /staging/i.test(f.text));
-    if (!hasProd && hasStaging) {
-      reasons.push('声称 production，证据只有 staging');
+    const hasProd = evidence.facts.some(f => /"environment"\s*:\s*"(production|prod|live)"|production|\bprod\b|\blive\b/i.test(f.text) && !/staging/i.test(f.text));
+    const st = evidence.facts.find(f => /staging/i.test(f.text));
+    if (!hasProd && st) {
+      reasons.push('声称 production/已上线，证据只有 staging');
       conflictSignals.push('environment: staging');
-      const st = evidence.facts.find(f => /staging/i.test(f.text));
-      if (st) evidenceSnippets.push({ id: st.id, line: st.line, snippet: st.snippet, score: 1 });
+      evidenceSnippets.push({ id: st.id, line: st.line, snippet: st.snippet, score: 1 });
       return pack('contradicted', {
         kind: 'factual',
         risks: risks.includes('already_deployed') ? risks : [...risks, 'already_deployed'],
         reasons, evidenceMatches: uniq(evidenceMatches), conflictSignals: uniq(conflictSignals),
-        evidenceSnippets: uniqSnips(evidenceSnippets), bestFactId: st?.id, confidence: 0.82,
+        evidenceSnippets: uniqSnips(evidenceSnippets), bestFactId: st.id, confidence: 0.9,
+      });
+    }
+  }
+
+  // Pipeline both-ok vs degraded/failed feeds
+  if (/pipeline|bilibili|youtube/i.test(claim) && /both|all|confirmed operational|都|全部|均/.test(claim)) {
+    const pipe = evidence.facts.find(f => /youtube|bilibili|pipeline/i.test(f.text));
+    if (pipe && /degraded|fail|error|down|quota exceeded/i.test(pipe.text)) {
+      reasons.push(`管道并非全部正常：证据显示异常（L${pipe.line}）`);
+      conflictSignals.push(clip(pipe.snippet, 100));
+      evidenceSnippets.unshift({ id: pipe.id, line: pipe.line, snippet: pipe.snippet, score: 0 });
+      return pack('contradicted', {
+        kind: 'factual', risks, reasons,
+        evidenceMatches: uniq(evidenceMatches), conflictSignals: uniq(conflictSignals),
+        evidenceSnippets: uniqSnips(evidenceSnippets), bestFactId: pipe.id, confidence: 0.88,
+      });
+    }
+  }
+
+  // CI all green vs failed checks
+  if (/ci\/cd|all checks are green|checks are green|全部绿灯|流水线/i.test(claim)) {
+    const ci = evidence.facts.find(f => /ci_run|failing_checks|"status"\s*:\s*"failed"/i.test(f.text));
+    if (ci && /failed|failing/i.test(ci.text)) {
+      reasons.push(`CI 并非全绿：证据显示失败（L${ci.line}）`);
+      conflictSignals.push(clip(ci.snippet, 100));
+      evidenceSnippets.unshift({ id: ci.id, line: ci.line, snippet: ci.snippet, score: 0 });
+      return pack('contradicted', {
+        kind: 'factual', risks: risks.length ? risks : ['bold_success'], reasons,
+        evidenceMatches: uniq(evidenceMatches), conflictSignals: uniq(conflictSignals),
+        evidenceSnippets: uniqSnips(evidenceSnippets), bestFactId: ci.id, confidence: 0.9,
+      });
+    }
+  }
+
+  // Cost reduction claims need cost family evidence; coverage is not cost
+  if (/cost|api costs|成本|费用/i.test(claim) && extractNums(claim).some(n => n.unit === '%' || /%/.test(n.raw))) {
+    const costFact = evidence.facts.find(f => /cost|reduction|api_cost/i.test(f.text));
+    const claimPct = extractNums(claim).find(n => n.unit === '%' || /%/.test(n.raw));
+    if (costFact && claimPct) {
+      // find numeric reduction
+      const nums = costFact.nums.filter(n => /cost|reduction/i.test(n.key));
+      if (nums.length) {
+        const ev = nums[0];
+        const evPct = ev.value <= 1 ? ev.value * 100 : ev.value;
+        if (Math.abs(evPct - claimPct.value) > 8) {
+          reasons.push(`成本降幅不匹配：claim ${claimPct.raw} vs evidence ${ev.key}=${ev.value}`);
+          conflictSignals.push(`${ev.key}=${ev.value}`);
+          evidenceSnippets.unshift({ id: costFact.id, line: costFact.line, snippet: costFact.snippet, score: 0 });
+          return pack('contradicted', {
+            kind: 'factual', risks, reasons,
+            evidenceMatches: uniq(evidenceMatches), conflictSignals: uniq(conflictSignals),
+            evidenceSnippets: uniqSnips(evidenceSnippets), bestFactId: costFact.id, confidence: 0.86,
+          });
+        }
+      }
+    } else if (!costFact) {
+      // if only matched via coverage coincidence, strip false support later via family rules
+      reasons.push('成本断言未找到 cost 类证据字段');
+    }
+  }
+
+  // zero latency vs measured latency/errors
+  if (/zero latency|零延迟|no latency/i.test(claim)) {
+    const lt = evidence.facts.find(f => /latency|p99|errors/i.test(f.text));
+    if (lt) {
+      reasons.push(`零延迟断言与实测延迟/错误冲突（L${lt.line}）`);
+      conflictSignals.push(clip(lt.snippet, 100));
+      evidenceSnippets.unshift({ id: lt.id, line: lt.line, snippet: lt.snippet, score: 0 });
+      return pack('contradicted', {
+        kind: 'factual', risks: risks.length ? risks : ['no_issues'], reasons,
+        evidenceMatches: uniq(evidenceMatches), conflictSignals: uniq(conflictSignals),
+        evidenceSnippets: uniqSnips(evidenceSnippets), bestFactId: lt.id, confidence: 0.9,
       });
     }
   }
@@ -365,8 +491,26 @@ function classifyWithEvidence(claim, evidence) {
   const bestScore = top?.score || 0;
   const matchCount = uniq(evidenceMatches).length;
 
+  // If top match is only cross-family numeric coincidence, demote hard
+  const familyConflicts = (top?.conflicts || []).filter(c => /指标家族不同/.test(c.detail));
+  if (familyConflicts.length && (!top.matchedNums.length || top.matchedNums.every(n => !n.family || n.family === 'generic'))) {
+    for (const c of familyConflicts) {
+      reasons.push(c.detail);
+      conflictSignals.push(c.evidence);
+    }
+  }
+
   if (bestScore >= 6 || (bestScore >= 4.5 && matchCount >= 2)) {
-    if (conflictSignals.length) {
+    if (conflictSignals.length || familyConflicts.length) {
+      // wrong-family near-miss should not become supported
+      if (familyConflicts.length && top.matchedNums.length === 0) {
+        reasons.push('存在数值巧合但指标不一致 → 不能算支撑');
+        return pack('contradicted', {
+          kind: 'factual', risks, reasons,
+          evidenceMatches: uniq(evidenceMatches), conflictSignals: uniq(conflictSignals),
+          evidenceSnippets: uniqSnips(evidenceSnippets), bestFactId: top?.fact?.id, confidence: 0.75,
+        });
+      }
       reasons.push('有支撑但残留冲突 → 需人工核对片段');
       return pack('needs_human', {
         kind, risks, reasons, evidenceMatches: uniq(evidenceMatches), conflictSignals: uniq(conflictSignals),
@@ -374,7 +518,7 @@ function classifyWithEvidence(claim, evidence) {
       });
     }
     reasons.push(`命中证据 L${top.fact.line}（score ${bestScore.toFixed(1)}）`);
-    for (const n of top.matchedNums) reasons.push(`数值对齐 ${n.claim} ≈ ${n.evidence}`);
+    for (const n of top.matchedNums) reasons.push(`数值对齐 ${n.claim} ≈ ${n.evidence}${n.family ? ' ['+n.family+']' : ''}`);
     return pack('supported', {
       kind: 'factual', risks, reasons, evidenceMatches: uniq(evidenceMatches), conflictSignals: [],
       evidenceSnippets: uniqSnips(evidenceSnippets), bestFactId: top.fact.id, confidence: Math.min(0.95, 0.55 + bestScore / 20),
@@ -495,7 +639,7 @@ export function analyze(answerText, evidenceText) {
     factCount: evidence.facts.length,
     mode,
     summary,
-    version: '1.3.0',
+    version: '1.4.0',
     disclaimer: 'Offline heuristic auditor — high precision on explicit evidence conflicts; not a guarantee of absolute truth.',
   };
 }
@@ -507,7 +651,7 @@ export function generateMarkdownReport(results) {
     needs_human: '🔍 needs human', unverified: '⬜ unverified', unsupported: '⚠️ unsupported',
     contradicted: '❌ contradicted',
   };
-  let md = `# ClaimTape Report\n\n**Score:** ${score}/100  \n**Mode:** ${mode}  \n**Evidence:** ${hasEvidence ? 'yes' : 'no'}  \n**Engine:** v1.3\n\n> ${summary}\n\n> ${disclaimer}\n\n`;
+  let md = `# ClaimTape Report\n\n**Score:** ${score}/100  \n**Mode:** ${mode}  \n**Evidence:** ${hasEvidence ? 'yes' : 'no'}  \n**Engine:** v1.4\n\n> ${summary}\n\n> ${disclaimer}\n\n`;
   md += `| Status | n |\n|---|---|\n`;
   for (const [k, v] of Object.entries(stats)) md += `| ${k} | ${v} |\n`;
   md += '\n';
@@ -528,7 +672,7 @@ export function generateMarkdownReport(results) {
 
 export function generateJSONExport(results, answerText, evidenceText) {
   return JSON.stringify({
-    meta: { tool: 'ClaimTape', version: '1.3.0', generated: new Date().toISOString() },
+    meta: { tool: 'ClaimTape', version: '1.4.0', generated: new Date().toISOString() },
     input: { answerLength: answerText?.length ?? 0, evidenceLength: evidenceText?.length ?? 0, hasEvidence: !!evidenceText?.trim() },
     score: results.score,
     mode: results.mode,

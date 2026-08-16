@@ -257,3 +257,62 @@ textarea:focus { border-color: rgba(56,189,248,.5); box-shadow: 0 0 0 3px rgba(5
   border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px;
 }
 .claim-tags .conf { color: var(--cyan); }
+
+/* v1.4 orchestra-grade polish */
+:root {
+  --bg: #070c1a;
+  --panel: rgba(13, 22, 40, .78);
+  --panel2: rgba(15, 25, 50, .88);
+  --line: rgba(0, 212, 170, .16);
+  --text: #e8f4ff;
+  --muted: #8ba8cc;
+  --teal: #00d4aa;
+  --cyan: #00b8d9;
+  --violet: #7c4dff;
+  --pink: #e040fb;
+  --amber: #ffab40;
+  --rose: #ff5370;
+}
+.ct-nav {
+  border-bottom-color: rgba(0,212,170,.12);
+  box-shadow: 0 10px 40px rgba(0,0,0,.25);
+}
+.ct-mark {
+  background: linear-gradient(135deg, #00d4aa, #00b8d9 45%, #7c4dff);
+  box-shadow: 0 0 30px rgba(0,212,170,.35);
+}
+.primary {
+  background: linear-gradient(135deg, #00d4aa 0%, #00b8d9 45%, #7c4dff 100%);
+  box-shadow: 0 12px 34px rgba(0,212,170,.28);
+}
+.panel {
+  border-color: rgba(0,212,170,.14);
+  background:
+    linear-gradient(135deg, rgba(0,212,170,.05), rgba(124,77,255,.05)),
+    linear-gradient(165deg, var(--panel2), var(--panel));
+  box-shadow: 0 24px 70px rgba(0,0,0,.38), inset 0 1px 0 rgba(255,255,255,.04);
+}
+.claim.open {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--c) 35%, transparent), 0 18px 50px rgba(0,0,0,.4), 0 0 40px color-mix(in srgb, var(--c) 12%, transparent);
+}
+.score-orb { filter: drop-shadow(0 0 22px color-mix(in srgb, var(--c) 45%, transparent)); }
+.mode-banner {
+  border-color: rgba(0,212,170,.28);
+  background: linear-gradient(90deg, rgba(0,212,170,.1), rgba(124,77,255,.08));
+}
+.chip.on {
+  background: linear-gradient(135deg, rgba(0,212,170,.22), rgba(124,77,255,.22));
+  border-color: rgba(0,212,170,.45);
+}
+.ct-hero h1 {
+  background: linear-gradient(105deg, #fff 8%, #00d4aa 38%, #00b8d9 58%, #7c4dff 82%, #e040fb);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  background-size: 200% auto;
+  animation: title-sheen 7s linear infinite;
+}
+@keyframes title-sheen { to { background-position: 200% center; } }
+.stat {
+  background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+}
+.ghost:hover { border-color: rgba(0,212,170,.45); box-shadow: 0 0 18px rgba(0,212,170,.12); }
+.toast { border-color: rgba(0,212,170,.4); box-shadow: 0 12px 40px rgba(0,0,0,.4); }

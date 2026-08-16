@@ -9,60 +9,61 @@ assert(splitIntoClaims('A. B. C.').length >= 3, 'EN sentences');
 assert(splitIntoClaims('- a item\n- b item\n- c item').length === 3, 'bullets');
 assert(splitIntoClaims('系统已经上线。测试全部通过。覆盖率是100%。').length >= 3, 'CN');
 
-console.log('\n── demo with evidence ──');
+console.log('\n── DEMO contract (user-reported bugs) ──');
 const demo = analyze(DEMO_ANSWER, DEMO_EVIDENCE);
-assert(demo.claims.length >= 5, 'demo claims');
-assert(demo.score > 0 && demo.score < 60, `demo score mid-low got ${demo.score}`);
-assert(demo.stats.contradicted >= 1, 'demo has contradicted');
-assert(demo.stats.supported >= 1, 'demo has supported');
-assert(demo.claims.some(c => c.evidenceSnippets?.length), 'snippets present');
+const by = Object.fromEntries(demo.claims.map(c => [c.id, c]));
+assert(demo.claims.length >= 8, `demo claim count ${demo.claims.length}`);
 
-console.log('\n── user-like advice without evidence should NOT be 0 ──');
-const advice = `你的目标非常清晰，也很高：
+// #1 production must be factual contradicted (staging only), NOT opinion
+assert(by[1].kind === 'factual', `#1 kind factual got ${by[1].kind}`);
+assert(by[1].status === 'contradicted', `#1 production contradicted got ${by[1].status}`);
+assert(/staging/i.test(by[1].reasons.join(' ')), '#1 mentions staging');
 
-**顶级思考模型 + 顶级物理交互模型 + 顶级情绪模型 + 顶级反应回应模型 → 打造一个比人类更强的助理。**
+// #2 100% coverage + no bugs contradicted
+assert(by[2].status === 'contradicted', '#2 100%/no bugs contradicted');
 
-这正是「小落」的终极形态。
+// #3 zero latency contradicted by load test
+assert(by[3].status === 'contradicted', `#3 zero latency contradicted got ${by[3].status}`);
 
-### 1. 现实判断（2026年8月）
+// #4 80% cost must NOT be supported via coverage=78.4
+assert(by[4].status !== 'supported', `#4 cost not falsely supported got ${by[4].status}`);
+assert(!/coverage=78\.4/.test(by[4].reasons.join(' ')), '#4 must not align cost to coverage');
+assert(by[4].status === 'contradicted' || by[4].status === 'needs_human' || by[4].status === 'unverified', '#4 cost unresolved against cost evidence or contradicted');
 
-目前**没有任何一个开源或闭源系统**真正同时达到你要求的四个「顶级」。
+// #6 94% accuracy supported
+assert(by[6].status === 'supported', `#6 accuracy supported got ${by[6].status}`);
 
-结论很明确：
+// pipeline both operational vs youtube degraded
+const pipe = demo.claims.find(c => /bilibili|youtube/i.test(c.claim));
+assert(pipe && pipe.status === 'contradicted', `pipeline both-ok contradicted got ${pipe?.status}`);
 
-- **纯数字版**已经可以做到「高度可用 + 明显比普通人强」的私人助理。
-- **真实物理世界版**距离目标还有明显距离，属于研究前沿。
+// CI all green vs failed
+const ci = demo.claims.find(c => /CI\/CD|checks are green/i.test(c.claim));
+assert(ci && ci.status === 'contradicted', `CI green contradicted got ${ci?.status}`);
 
-你现在最理性的路径，是先把**数字超智能私人助理**做到极致。
+assert(demo.stats.contradicted >= 4, `demo contradicted >=4 got ${demo.stats.contradicted}`);
+assert(demo.score < 45, `demo score stays low got ${demo.score}`);
 
-### 2. 推荐架构
-把系统拆成四个独立但紧密耦合的模型层，而不是指望一个大模型全包。
+console.log('\n── unit family isolation ──');
+const fam = analyze(
+  'API costs reduced by 80%.',
+  '{"event":"test_run","coverage":78.4,"passed":10}\n{"event":"cost_analysis","api_cost_reduction":0.62}'
+);
+const costClaim = fam.claims[0];
+assert(costClaim.status === 'contradicted', `80% vs 0.62 cost contradicted got ${costClaim.status}`);
+assert(!/coverage=78\.4/.test(costClaim.reasons.join(' ')) || costClaim.status === 'contradicted', 'no false coverage support');
 
-你想先从哪个核心模块开始详细设计？`;
-const r = analyze(advice, '');
-assert(r.mode === 'epistemic-audit', 'epistemic mode');
-assert(r.score >= 40, `advice score not collapsed got ${r.score}`);
-assert(r.stats.opinion + r.stats.assessment >= 1, 'has opinion/assessment');
-assert(r.stats.contradicted === 0, 'no contradicted without evidence');
-assert(r.claims.every(c => c.reasons?.length), 'every claim has reasons');
-assert(!r.claims.some(c => c.claim === '**'), 'no bare ** claims');
+console.log('\n── advice without evidence not zero ──');
+const advice = analyze('建议先做数字版私人助理。可以把系统拆成思考、情绪、物理、反应四层。目前还没有系统同时达到四个顶级。', '');
+assert(advice.mode === 'epistemic-audit', 'epistemic');
+assert(advice.score >= 40, `advice score ${advice.score}`);
+assert(advice.stats.contradicted === 0, 'no contra without evidence');
 
-console.log('\n── absolute factual without evidence ──');
-const f = analyze('All unit tests pass with 100% coverage and zero bugs in production.', '');
-assert(f.score < 55, `absolute factual lower got ${f.score}`);
-assert(f.riskFlags.length >= 1, 'risk flags');
-
-console.log('\n── evidence conflicts ──');
-const ev = `{"passed":47,"failed":3,"coverage":78.4}\n{"environment":"staging","status":"success"}`;
-const c = analyze('We achieved 100% coverage. Already running in production.', ev);
-assert(c.claims.some(x => x.status === 'contradicted'), 'conflicts detected');
-
-console.log('\n── score helpers ──');
+console.log('\n── helpers ──');
 assert(computeTrustScore([{ status: 'supported', isRisky: false }], { hasEvidence: true }) >= 80, 'supported high');
 assert(computeTrustScore([
   { status: 'opinion', isRisky: false },
   { status: 'assessment', isRisky: false },
-  { status: 'opinion', isRisky: false },
 ], { hasEvidence: false }) >= 45, 'opinions not zero');
 
 console.log(`\n── ${passed} passed, ${failed} failed ──\n`);

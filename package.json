@@ -1,6 +1,6 @@
 {
   "name": "claimtape",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Did the AI actually prove that? Offline claim-by-claim trust reporter for AI answers.",
   "private": false,
   "license": "MIT",
