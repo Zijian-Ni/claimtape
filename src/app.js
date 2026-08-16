@@ -1,535 +1,26 @@
 import './style.css';
-// ClaimTape — Main App
 import { t } from './i18n.js';
 import { analyze, generateMarkdownReport, generateJSONExport } from './analyzer.js';
 import { DEMO_ANSWER, DEMO_EVIDENCE } from './demo.js';
 
-export function createApp(rootEl) {
+export function createApp(root) {
   let lang = localStorage.getItem('ct_lang') || 'en';
-  let currentResults = null;
   let answerText = '';
   let evidenceText = '';
-  let isAnalyzing = false;
+  let results = null;
+  let busy = false;
+  let activeClaim = null;
+  let filter = 'all';
+  let particles = [];
 
-  function render() {
-    rootEl.innerHTML = buildHTML();
-    bindEvents();
-    if (currentResults) renderResults();
-  }
+  const el = (html) => {
+    const d = document.createElement('div');
+    d.innerHTML = html.trim();
+    return d.firstElementChild;
+  };
 
-  function buildHTML() {
-    return `
-<div class="ct-app" data-lang="${lang}">
-  <div class="ct-aurora-bg" aria-hidden="true">
-    <div class="ct-band ct-band-1"></div>
-    <div class="ct-band ct-band-2"></div>
-    <div class="ct-band ct-band-3"></div>
-    <div class="ct-grid"></div>
-    <div class="ct-custom-bg" id="customBgLayer"></div>
-  </div>
-  ${buildHeader()}
-  ${buildHero()}
-  ${buildInputPanel()}
-  ${buildResultsPanel()}
-  ${buildFooter()}
-  ${buildThemeDock()}
-</div>`;
-  }
-
-  function buildThemeDock() {
-    return `
-<div class="ct-theme-dock" id="themeDock">
-  <button class="ct-theme-toggle" id="themeToggle" title="Background / 背景">🎨</button>
-  <div class="ct-theme-panel" id="themePanel" hidden>
-    <div class="ct-theme-title">${lang === 'en' ? 'Background' : '背景'}</div>
-    <div class="ct-theme-presets">
-      <button data-bg="aurora" class="ct-preset active">Aurora</button>
-      <button data-bg="midnight" class="ct-preset">Midnight</button>
-      <button data-bg="nebula" class="ct-preset">Nebula</button>
-      <button data-bg="ember" class="ct-preset">Ember</button>
-    </div>
-    <label class="ct-theme-upload">
-      ${lang === 'en' ? 'Custom image / GIF' : '自定义图片 / 动图'}
-      <input type="file" id="bgUpload" accept="image/*,.gif" hidden />
-    </label>
-    <input type="range" id="bgOpacity" min="10" max="90" value="35" />
-    <button class="ct-btn ct-btn--ghost" id="bgClear">${lang === 'en' ? 'Clear custom' : '清除自定义'}</button>
-  </div>
-</div>`;
-  }
-
-  function buildHeader() {
-    return `
-<header class="ct-header">
-  <div class="ct-header-inner">
-    <div class="ct-logo">
-      <span class="ct-logo-icon">📋</span>
-      <span class="ct-logo-text">ClaimTape</span>
-      <span class="ct-logo-badge">v1.1</span>
-    </div>
-    <div class="ct-header-actions">
-      <button class="ct-lang-toggle" id="langToggle" title="Switch language / 切换语言">
-        ${lang === 'en' ? '🇨🇳 中文' : '🇬🇧 EN'}
-      </button>
-      <a class="ct-github-btn" href="https://github.com/Zijian-Ni/claimtape" target="_blank" rel="noopener" title="View on GitHub">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-        GitHub
-      </a>
-    </div>
-  </div>
-</header>`;
-  }
-
-  function buildHero() {
-    return `
-<section class="ct-hero">
-  <div class="ct-hero-glow"></div>
-  <div class="ct-hero-content">
-    <h1 class="ct-hero-title">${t(lang, 'tagline')}</h1>
-    <p class="ct-hero-sub">${t(lang, 'subtitle')}</p>
-    <div class="ct-hero-pills">
-      <span class="ct-pill">🎓 ${lang === 'en' ? 'Students' : '学生'}</span>
-      <span class="ct-pill">📊 ${lang === 'en' ? 'PMs' : '产品经理'}</span>
-      <span class="ct-pill">💻 ${lang === 'en' ? 'Developers' : '开发者'}</span>
-      <span class="ct-pill">👨‍👩‍👧 ${lang === 'en' ? 'Parents checking AI homework' : '检查作业的家长'}</span>
-    </div>
-  </div>
-</section>`;
-  }
-
-  function buildInputPanel() {
-    return `
-<section class="ct-input-panel">
-  <div class="ct-panel-inner">
-
-    <div class="ct-input-group">
-      <label class="ct-label" for="answerInput">
-        <span class="ct-label-icon">🤖</span>
-        ${t(lang, 'inputLabel')}
-      </label>
-      <textarea
-        id="answerInput"
-        class="ct-textarea ct-textarea--answer"
-        placeholder="${t(lang, 'inputPlaceholder')}"
-        spellcheck="false"
-        rows="10"
-      >${escapeHtml(answerText)}</textarea>
-    </div>
-
-    <div class="ct-input-group">
-      <label class="ct-label" for="evidenceInput">
-        <span class="ct-label-icon">🔍</span>
-        ${t(lang, 'evidenceLabel')}
-        <span class="ct-optional-badge">${lang === 'en' ? 'optional' : '可选'}</span>
-      </label>
-      <textarea
-        id="evidenceInput"
-        class="ct-textarea ct-textarea--evidence"
-        placeholder="${t(lang, 'evidencePlaceholder')}"
-        spellcheck="false"
-        rows="8"
-      >${escapeHtml(evidenceText)}</textarea>
-      <div class="ct-upload-row">
-        <label class="ct-upload-btn" for="fileUpload">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          ${t(lang, 'uploadBtn')}
-        </label>
-        <input type="file" id="fileUpload" accept=".jsonl,.md,.txt,.json,.log" style="display:none">
-        <span id="uploadFileName" class="ct-upload-name"></span>
-      </div>
-    </div>
-
-    <div class="ct-action-row">
-      <button id="analyzeBtn" class="ct-btn ct-btn--primary" ${isAnalyzing ? 'disabled' : ''}>
-        ${isAnalyzing
-          ? `<span class="ct-spinner"></span>${t(lang, 'analyzing')}`
-          : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>${t(lang, 'analyzeBtn')}`
-        }
-      </button>
-      <button id="demoBtn" class="ct-btn ct-btn--secondary">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        ${t(lang, 'demoBtn')}
-      </button>
-      <button id="clearBtn" class="ct-btn ct-btn--ghost">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
-        ${t(lang, 'clearBtn')}
-      </button>
-    </div>
-
-    <p class="ct-privacy-note">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-      ${t(lang, 'privacyNote')}
-    </p>
-  </div>
-</section>`;
-  }
-
-  function buildResultsPanel() {
-    if (!currentResults) return '<div id="resultsPanel"></div>';
-
-    const { claims, score, stats, riskFlags, hasEvidence } = currentResults;
-    const scoreLabel = score >= 70 ? 'high' : score >= 45 ? 'medium' : score >= 25 ? 'low' : 'verylow';
-    const scoreColor = score >= 70 ? '#10b981' : score >= 45 ? '#f59e0b' : score >= 25 ? '#f97316' : '#ef4444';
-
-    return `
-<div id="resultsPanel">
-<section class="ct-results">
-  <div class="ct-panel-inner">
-
-    ${!hasEvidence ? `<div class="ct-no-evidence-banner">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-      ${t(lang, 'noEvidence')}
-    </div>` : `<div class="ct-has-evidence-banner">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-      ${t(lang, 'evidenceNote')}
-    </div>`}
-
-    <div class="ct-score-section">
-      <div class="ct-score-card">
-        <div class="ct-score-ring" style="--score-color:${scoreColor};--score:${score}">
-          <svg viewBox="0 0 120 120" class="ct-ring-svg">
-            <circle cx="60" cy="60" r="52" class="ct-ring-bg"/>
-            <circle cx="60" cy="60" r="52" class="ct-ring-fill"
-              style="stroke:${scoreColor};stroke-dasharray:${Math.round(2*Math.PI*52*score/100)} ${Math.round(2*Math.PI*52)};transform-origin:center;transform:rotate(-90deg)"/>
-          </svg>
-          <div class="ct-score-number" style="color:${scoreColor}">${score}</div>
-        </div>
-        <div class="ct-score-label">${t(lang, 'trustScore')}</div>
-        <div class="ct-score-grade" style="color:${scoreColor}">${t(lang, `scoreLabel.${scoreLabel}`)}</div>
-        <div class="ct-score-desc">${t(lang, 'trustScoreDesc')}</div>
-      </div>
-
-      <div class="ct-stats-grid">
-        ${buildStatCard(stats.total, t(lang, 'totalClaims'), '📊', '#64748b')}
-        ${buildStatCard(stats.supported, t(lang, 'supported'), '✅', '#10b981')}
-        ${buildStatCard(stats.unsupported, t(lang, 'unsupported'), '⚠️', '#f59e0b')}
-        ${buildStatCard(stats.contradicted, t(lang, 'contradicted'), '❌', '#ef4444')}
-        ${buildStatCard(stats.needs_human, t(lang, 'needsHuman'), '🔍', '#a78bfa')}
-      </div>
-    </div>
-
-    ${riskFlags.length > 0 ? `
-    <div class="ct-risk-section">
-      <h3 class="ct-section-title">
-        <span>⚠️</span> ${t(lang, 'riskTitle')}
-      </h3>
-      <div class="ct-risk-list">
-        ${riskFlags.map(f => `
-          <div class="ct-risk-item">
-            <span class="ct-risk-icon">🚩</span>
-            <span>${t(lang, `riskPatterns.${f}`)}</span>
-          </div>`).join('')}
-      </div>
-    </div>` : `
-    <div class="ct-no-risks">
-      <span>🟢</span> ${t(lang, 'noRisks')}
-    </div>`}
-
-    <div class="ct-claims-section">
-      <h3 class="ct-section-title">
-        <span>📋</span> ${t(lang, 'claimsTitle')}
-      </h3>
-      <div class="ct-claims-list">
-        ${claims.map(c => buildClaimCard(c)).join('')}
-      </div>
-    </div>
-
-    <div class="ct-export-row">
-      <button id="copyMarkdownBtn" class="ct-btn ct-btn--export">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-        ${t(lang, 'copyMarkdown')}
-      </button>
-      <button id="exportJSONBtn" class="ct-btn ct-btn--export">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        ${t(lang, 'exportJSON')}
-      </button>
-    </div>
-
-  </div>
-</section>
-</div>`;
-  }
-
-  function buildStatCard(value, label, icon, color) {
-    return `
-<div class="ct-stat-card" style="--stat-color:${color}">
-  <div class="ct-stat-icon">${icon}</div>
-  <div class="ct-stat-value" style="color:${color}">${value}</div>
-  <div class="ct-stat-label">${label}</div>
-</div>`;
-  }
-
-  function buildClaimCard(claim) {
-    const statusColors = {
-      supported: '#10b981',
-      unsupported: '#f59e0b',
-      contradicted: '#ef4444',
-      needs_human: '#a78bfa',
-    };
-    const color = statusColors[claim.status] || '#64748b';
-    const badge = t(lang, `badge.${claim.status}`);
-    const tooltip = t(lang, `badgeTooltip.${claim.status}`);
-
-    return `
-<div class="ct-claim-card ${claim.isRisky ? 'ct-claim-card--risky' : ''}" style="--claim-color:${color}">
-  <div class="ct-claim-header">
-    <span class="ct-claim-num">${t(lang, 'claimNumber')} ${claim.id}</span>
-    <span class="ct-badge" style="background:${color}20;color:${color};border-color:${color}40" title="${tooltip}">
-      ${badge}
-    </span>
-    ${claim.isRisky ? '<span class="ct-risk-tag">🚩 Risk</span>' : ''}
-  </div>
-  <p class="ct-claim-text">${escapeHtml(claim.claim)}</p>
-  ${claim.evidenceMatches.length > 0 ? `
-  <div class="ct-claim-meta">
-    <span class="ct-meta-label">${t(lang, 'evidenceMatches')}</span>
-    <div class="ct-keyword-chips">
-      ${claim.evidenceMatches.slice(0, 8).map(m => `<span class="ct-chip ct-chip--match">${escapeHtml(m)}</span>`).join('')}
-      ${claim.evidenceMatches.length > 8 ? `<span class="ct-chip ct-chip--more">+${claim.evidenceMatches.length - 8}</span>` : ''}
-    </div>
-  </div>` : (claim.status !== 'supported' ? `
-  <div class="ct-claim-meta">
-    <span class="ct-meta-label ct-meta-label--dim">${t(lang, 'noEvidenceMatches')}</span>
-  </div>` : '')}
-  ${claim.conflictSignals.length > 0 ? `
-  <div class="ct-claim-meta">
-    <span class="ct-meta-label ct-meta-label--conflict">${t(lang, 'conflictMatches')}</span>
-    <div class="ct-keyword-chips">
-      ${claim.conflictSignals.map(s => `<span class="ct-chip ct-chip--conflict">${escapeHtml(s)}</span>`).join('')}
-    </div>
-  </div>` : ''}
-  ${claim.reasons?.length ? `
-  <div class="ct-claim-meta">
-    <span class="ct-meta-label">${lang === 'en' ? 'Why' : '判定理由'}</span>
-    <div class="ct-reason-list">${claim.reasons.map(r => `<span class="ct-reason">${escapeHtml(r)}</span>`).join('')}</div>
-  </div>` : ''}
-</div>`;
-  }
-
-  function buildFooter() {
-    return `
-<footer class="ct-footer">
-  <div class="ct-footer-inner">
-    <div class="ct-footer-how">
-      <h4>${t(lang, 'howItWorks')}</h4>
-      <div class="ct-how-steps">
-        ${[1,2,3,4].map(n => `<div class="ct-how-step"><span class="ct-step-num">${n}</span><span>${t(lang, `how${n}`)}</span></div>`).join('')}
-      </div>
-    </div>
-    <p class="ct-footer-text">${t(lang, 'footer')}</p>
-  </div>
-</footer>`;
-  }
-
-  // ───── Events ─────
-
-  function bindEvents() {
-    // Language toggle
-    document.getElementById('langToggle')?.addEventListener('click', () => {
-      lang = lang === 'en' ? 'zh' : 'en';
-      localStorage.setItem('ct_lang', lang);
-      // Save inputs before re-render
-      syncInputs();
-      render();
-      if (currentResults) window.scrollTo({ top: document.querySelector('.ct-results')?.offsetTop ?? 0, behavior: 'smooth' });
-    });
-
-    // Sync textarea content on change
-    document.getElementById('answerInput')?.addEventListener('input', e => { answerText = e.target.value; });
-    document.getElementById('evidenceInput')?.addEventListener('input', e => { evidenceText = e.target.value; });
-
-    // Analyze
-    document.getElementById('analyzeBtn')?.addEventListener('click', () => {
-      syncInputs();
-      if (!answerText.trim()) {
-        flashEmpty('answerInput');
-        return;
-      }
-      runAnalysis();
-    });
-
-    // Demo
-    document.getElementById('demoBtn')?.addEventListener('click', () => {
-      answerText = DEMO_ANSWER;
-      evidenceText = DEMO_EVIDENCE;
-      runAnalysis(true);
-    });
-
-    // Clear
-    document.getElementById('clearBtn')?.addEventListener('click', () => {
-      answerText = '';
-      evidenceText = '';
-      currentResults = null;
-      render();
-    });
-
-    // File upload
-    document.getElementById('fileUpload')?.addEventListener('change', e => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = ev => {
-        evidenceText = ev.target.result;
-        const el = document.getElementById('evidenceInput');
-        if (el) el.value = evidenceText;
-        const nameEl = document.getElementById('uploadFileName');
-        if (nameEl) nameEl.textContent = file.name;
-      };
-      reader.readAsText(file);
-    });
-
-    // Export
-    document.getElementById('copyMarkdownBtn')?.addEventListener('click', () => {
-      if (!currentResults) return;
-      const md = generateMarkdownReport(currentResults, lang);
-      navigator.clipboard.writeText(md).then(() => {
-        flashBtn('copyMarkdownBtn', t(lang, 'copied'));
-      });
-    });
-
-    document.getElementById('exportJSONBtn')?.addEventListener('click', () => {
-      if (!currentResults) return;
-      const json = generateJSONExport(currentResults, answerText, evidenceText);
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `claimtape-report-${Date.now()}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      flashBtn('exportJSONBtn', t(lang, 'downloaded'));
-    });
-
-    bindThemeDock();
-  }
-
-  function bindThemeDock() {
-    const dock = document.getElementById('themeDock');
-    const panel = document.getElementById('themePanel');
-    const toggle = document.getElementById('themeToggle');
-    if (!dock || !panel || !toggle) return;
-
-    // restore
-    applySavedBg();
-
-    toggle.addEventListener('click', (e) => {
-      e.stopPropagation();
-      panel.hidden = !panel.hidden;
-    });
-
-    panel.querySelectorAll('.ct-preset').forEach(btn => {
-      btn.addEventListener('click', () => {
-        panel.querySelectorAll('.ct-preset').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        localStorage.setItem('ct_bg_preset', btn.dataset.bg);
-        document.documentElement.dataset.bg = btn.dataset.bg;
-      });
-    });
-
-    document.getElementById('bgUpload')?.addEventListener('change', async (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = reader.result;
-        try { localStorage.setItem('ct_bg_custom', dataUrl); } catch { /* quota */ }
-        applyCustomBg(dataUrl);
-      };
-      reader.readAsDataURL(file);
-    });
-
-    document.getElementById('bgOpacity')?.addEventListener('input', (e) => {
-      const v = e.target.value;
-      localStorage.setItem('ct_bg_opacity', v);
-      document.documentElement.style.setProperty('--ct-custom-opacity', String(Number(v) / 100));
-    });
-
-    document.getElementById('bgClear')?.addEventListener('click', () => {
-      localStorage.removeItem('ct_bg_custom');
-      applyCustomBg(null);
-    });
-  }
-
-  function applySavedBg() {
-    const preset = localStorage.getItem('ct_bg_preset') || 'aurora';
-    document.documentElement.dataset.bg = preset;
-    document.querySelectorAll('.ct-preset').forEach(b => {
-      b.classList.toggle('active', b.dataset.bg === preset);
-    });
-    const op = localStorage.getItem('ct_bg_opacity') || '35';
-    document.documentElement.style.setProperty('--ct-custom-opacity', String(Number(op) / 100));
-    const opEl = document.getElementById('bgOpacity');
-    if (opEl) opEl.value = op;
-    const custom = localStorage.getItem('ct_bg_custom');
-    if (custom) applyCustomBg(custom);
-  }
-
-  function applyCustomBg(dataUrl) {
-    const layer = document.getElementById('customBgLayer');
-    if (!layer) return;
-    if (dataUrl) {
-      layer.style.backgroundImage = `url(${dataUrl})`;
-      layer.classList.add('show');
-    } else {
-      layer.style.backgroundImage = '';
-      layer.classList.remove('show');
-    }
-  }
-
-  function syncInputs() {
-    const a = document.getElementById('answerInput');
-    const e = document.getElementById('evidenceInput');
-    if (a) answerText = a.value;
-    if (e) evidenceText = e.value;
-  }
-
-  function runAnalysis(isDemo = false) {
-    isAnalyzing = true;
-    // Keep inputs populated during render
-    const savedAnswer = answerText;
-    const savedEvidence = evidenceText;
-    render();
-    // Restore inputs
-    answerText = savedAnswer;
-    evidenceText = savedEvidence;
-
-    // Simulate brief async for UX
-    setTimeout(() => {
-      currentResults = analyze(answerText, evidenceText);
-      isAnalyzing = false;
-      render();
-      // Scroll to results
-      setTimeout(() => {
-        const el = document.getElementById('resultsPanel');
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 50);
-    }, 300);
-  }
-
-  function renderResults() {
-    // Already rendered in buildHTML
-  }
-
-  function flashEmpty(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.add('ct-shake');
-    el.focus();
-    setTimeout(() => el.classList.remove('ct-shake'), 600);
-  }
-
-  function flashBtn(id, text) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const orig = el.innerHTML;
-    el.textContent = text;
-    el.classList.add('ct-btn--success');
-    setTimeout(() => { el.innerHTML = orig; el.classList.remove('ct-btn--success'); }, 1500);
-  }
-
-  function escapeHtml(str) {
-    if (!str) return '';
-    return str
+  function esc(s) {
+    return String(s ?? '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -537,11 +28,439 @@ export function createApp(rootEl) {
       .replace(/'/g, '&#39;');
   }
 
-  // Initial render
+  function render() {
+    root.innerHTML = '';
+    root.appendChild(buildShell());
+    bind();
+    requestAnimationFrame(() => {
+      root.querySelector('.ct-shell')?.classList.add('is-ready');
+      if (results) animateScore();
+    });
+  }
+
+  function buildShell() {
+    return el(`
+<div class="ct-shell" data-lang="${lang}">
+  <canvas class="ct-fx" id="fx" aria-hidden="true"></canvas>
+  <div class="ct-orb o1"></div><div class="ct-orb o2"></div><div class="ct-orb o3"></div>
+  <div class="ct-custom-bg" id="customBg"></div>
+
+  <header class="ct-nav">
+    <div class="ct-brand">
+      <span class="ct-mark">📋</span>
+      <div>
+        <strong>ClaimTape</strong>
+        <small>evidence-first · v1.2</small>
+      </div>
+    </div>
+    <div class="ct-nav-actions">
+      <button class="ghost" id="langBtn">${lang === 'en' ? '中文' : 'EN'}</button>
+      <button class="ghost" id="themeBtn">🎨</button>
+      <a class="ghost" href="https://github.com/Zijian-Ni/claimtape" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </header>
+
+  <section class="ct-hero">
+    <div class="eyebrow">◈ offline AI claim auditor</div>
+    <h1>${esc(t(lang, 'tagline'))}</h1>
+    <p>${esc(t(lang, 'subtitle'))}</p>
+    <div class="pills">
+      <span>🎓 Students</span><span>📊 PMs</span><span>💻 Devs</span><span>👨‍👩‍👧 Parents</span>
+    </div>
+  </section>
+
+  <section class="ct-workspace">
+    <div class="panel input-panel">
+      <div class="panel-head">
+        <h2>① ${lang === 'en' ? 'Inputs' : '输入'}</h2>
+        <div class="row-actions">
+          <button class="ghost sm" id="demoBtn">⚡ Demo</button>
+          <button class="ghost sm" id="clearBtn">Clear</button>
+        </div>
+      </div>
+
+      <label class="field">
+        <span>🤖 ${t(lang, 'inputLabel')}</span>
+        <textarea id="answer" rows="9" placeholder="${esc(t(lang, 'inputPlaceholder'))}">${esc(answerText)}</textarea>
+      </label>
+
+      <label class="field">
+        <span>🔍 ${t(lang, 'evidenceLabel')} <em>${lang === 'en' ? 'optional but recommended' : '可选但强烈建议'}</em></span>
+        <textarea id="evidence" rows="8" placeholder="${esc(t(lang, 'evidencePlaceholder'))}">${esc(evidenceText)}</textarea>
+      </label>
+
+      <div class="toolbar">
+        <label class="file-btn">
+          ⬆ ${t(lang, 'uploadBtn')}
+          <input type="file" id="file" accept=".jsonl,.md,.txt,.json,.log" hidden />
+        </label>
+        <span class="file-name" id="fileName"></span>
+        <button class="primary" id="analyzeBtn" ${busy ? 'disabled' : ''}>
+          ${busy ? `<span class="spin"></span>${t(lang, 'analyzing')}` : `✦ ${t(lang, 'analyzeBtn')}`}
+        </button>
+      </div>
+      <p class="lock">🔒 ${t(lang, 'privacyNote')}</p>
+    </div>
+
+    <div class="panel result-panel" id="resultPanel">
+      ${results ? buildResults() : buildEmpty()}
+    </div>
+  </section>
+
+  <section class="ct-how">
+    <h3>${t(lang, 'howItWorks')}</h3>
+    <div class="steps">
+      ${[1,2,3,4].map(n => `<div class="step"><i>${n}</i><span>${t(lang, 'how' + n)}</span></div>`).join('')}
+    </div>
+  </section>
+
+  <div class="theme-pop" id="themePop" hidden>
+    <div class="theme-title">${lang === 'en' ? 'Atmosphere' : '氛围'}</div>
+    <div class="presets">
+      <button data-bg="aurora">Aurora</button>
+      <button data-bg="midnight">Midnight</button>
+      <button data-bg="nebula">Nebula</button>
+      <button data-bg="ember">Ember</button>
+    </div>
+    <label class="upload-bg">${lang === 'en' ? 'Custom image / GIF' : '自定义图片/动图'}
+      <input type="file" id="bgFile" accept="image/*,.gif" hidden />
+    </label>
+    <input type="range" id="bgOp" min="8" max="80" value="28" />
+    <button class="ghost sm" id="bgClear">${lang === 'en' ? 'Clear custom' : '清除自定义'}</button>
+  </div>
+
+  <footer class="ct-foot">${t(lang, 'footer')}</footer>
+</div>`);
+  }
+
+  function buildEmpty() {
+    return `
+      <div class="empty-state">
+        <div class="empty-ring"></div>
+        <h3>${lang === 'en' ? 'Run an analysis to open the trust cockpit' : '开始分析后进入可信度驾驶舱'}</h3>
+        <p>${lang === 'en'
+          ? 'Each claim is matched against concrete evidence snippets — not vague keyword vibes.'
+          : '每条声明都会对齐到具体证据片段，而不是模糊关键词感觉。'}</p>
+        <button class="primary" id="emptyDemo">⚡ ${t(lang, 'demoBtn')}</button>
+      </div>`;
+  }
+
+  function buildResults() {
+    const { claims, score, stats, riskFlags, hasEvidence, factCount } = results;
+    const grade = score >= 70 ? 'high' : score >= 45 ? 'medium' : score >= 25 ? 'low' : 'verylow';
+    const color = score >= 70 ? '#34d399' : score >= 45 ? '#fbbf24' : score >= 25 ? '#fb923c' : '#f87171';
+    const list = filter === 'all' ? claims : claims.filter(c => c.status === filter);
+
+    return `
+      <div class="results-anim">
+        <div class="score-hero">
+          <div class="score-orb" style="--c:${color}">
+            <svg viewBox="0 0 120 120">
+              <circle class="track" cx="60" cy="60" r="52"/>
+              <circle class="fill" id="scoreArc" cx="60" cy="60" r="52"
+                stroke="${color}"
+                stroke-dasharray="0 999"/>
+            </svg>
+            <div class="score-num" id="scoreNum" style="color:${color}">0</div>
+          </div>
+          <div class="score-meta">
+            <div class="label">${t(lang, 'trustScore')}</div>
+            <div class="grade" style="color:${color}">${t(lang, 'scoreLabel.' + grade)}</div>
+            <div class="desc">${t(lang, 'trustScoreDesc')}</div>
+            <div class="mini-stats">
+              <span>${stats.total} claims</span>
+              <span>${hasEvidence ? `${factCount || 0} evidence facts` : 'no evidence'}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="stat-row">
+          ${stat(stats.supported, t(lang, 'supported'), '#34d399', 'supported')}
+          ${stat(stats.needs_human, t(lang, 'needsHuman'), '#a78bfa', 'needs_human')}
+          ${stat(stats.unsupported, t(lang, 'unsupported'), '#fbbf24', 'unsupported')}
+          ${stat(stats.contradicted, t(lang, 'contradicted'), '#f87171', 'contradicted')}
+        </div>
+
+        ${!hasEvidence ? `<div class="banner warn">${t(lang, 'noEvidence')}</div>` : `<div class="banner ok">${t(lang, 'evidenceNote')}</div>`}
+
+        ${riskFlags.length ? `
+          <div class="risk-box">
+            <h4>⚠️ ${t(lang, 'riskTitle')}</h4>
+            <div class="risk-chips">${riskFlags.map(f => `<span>${esc(t(lang, 'riskPatterns.' + f) || f)}</span>`).join('')}</div>
+          </div>` : `<div class="banner ok">🟢 ${t(lang, 'noRisks')}</div>`}
+
+        <div class="claims-head">
+          <h3>📋 ${t(lang, 'claimsTitle')}</h3>
+          <div class="filters">
+            ${['all','supported','needs_human','unsupported','contradicted'].map(f =>
+              `<button class="chip ${filter === f ? 'on' : ''}" data-f="${f}">${f === 'all' ? (lang==='en'?'All':'全部') : f}</button>`
+            ).join('')}
+          </div>
+        </div>
+
+        <div class="claim-list">
+          ${list.map((c, i) => claimCard(c, i)).join('') || `<p class="muted">No claims in this filter.</p>`}
+        </div>
+
+        <div class="export-row">
+          <button class="ghost" id="copyMd">📄 ${t(lang, 'copyMarkdown')}</button>
+          <button class="ghost" id="dlJson">⬇ ${t(lang, 'exportJSON')}</button>
+        </div>
+      </div>`;
+  }
+
+  function stat(v, label, color, key) {
+    return `<button class="stat ${filter === key ? 'on' : ''}" data-f="${key}" style="--c:${color}">
+      <b style="color:${color}">${v}</b><span>${label}</span>
+    </button>`;
+  }
+
+  function claimCard(c, i) {
+    const colors = { supported: '#34d399', unsupported: '#fbbf24', contradicted: '#f87171', needs_human: '#a78bfa' };
+    const col = colors[c.status] || '#94a3b8';
+    const open = activeClaim === c.id;
+    return `
+    <article class="claim ${open ? 'open' : ''}" data-id="${c.id}" style="--c:${col}; --d:${i * 40}ms">
+      <header>
+        <span class="idx">#${c.id}</span>
+        <span class="badge" style="color:${col};border-color:${col}55;background:${col}18">${esc(t(lang, 'badge.' + c.status))}</span>
+        ${c.isRisky ? '<span class="risk-tag">🚩</span>' : ''}
+        <span class="chev">${open ? '▾' : '▸'}</span>
+      </header>
+      <p class="claim-text">${esc(c.claim)}</p>
+      ${open ? `
+        <div class="claim-body">
+          ${c.reasons?.length ? `<div class="why"><h5>${lang==='en'?'Why':'判定理由'}</h5>${c.reasons.map(r => `<div>${esc(r)}</div>`).join('')}</div>` : ''}
+          ${c.evidenceMatches?.length ? `<div class="matches"><h5>${t(lang, 'evidenceMatches')}</h5><div class="tags">${c.evidenceMatches.slice(0,10).map(m => `<span>${esc(m)}</span>`).join('')}</div></div>` : ''}
+          ${c.conflictSignals?.length ? `<div class="matches bad"><h5>${t(lang, 'conflictMatches')}</h5><div class="tags">${c.conflictSignals.map(m => `<span>${esc(m)}</span>`).join('')}</div></div>` : ''}
+          ${c.evidenceSnippets?.length ? `<div class="snips"><h5>${lang==='en'?'Evidence snippets':'证据片段'}</h5>${c.evidenceSnippets.map(s => `
+            <pre><span class="ln">L${s.line}</span> ${esc(s.snippet)}</pre>`).join('')}</div>` : ''}
+        </div>` : ''}
+    </article>`;
+  }
+
+  function bind() {
+    root.querySelector('#langBtn')?.addEventListener('click', () => {
+      sync(); lang = lang === 'en' ? 'zh' : 'en'; localStorage.setItem('ct_lang', lang); render();
+    });
+    root.querySelector('#answer')?.addEventListener('input', e => answerText = e.target.value);
+    root.querySelector('#evidence')?.addEventListener('input', e => evidenceText = e.target.value);
+    root.querySelector('#analyzeBtn')?.addEventListener('click', run);
+    root.querySelector('#demoBtn')?.addEventListener('click', () => { answerText = DEMO_ANSWER; evidenceText = DEMO_EVIDENCE; run(true); });
+    root.querySelector('#emptyDemo')?.addEventListener('click', () => { answerText = DEMO_ANSWER; evidenceText = DEMO_EVIDENCE; run(true); });
+    root.querySelector('#clearBtn')?.addEventListener('click', () => { answerText=''; evidenceText=''; results=null; filter='all'; activeClaim=null; render(); });
+    root.querySelector('#file')?.addEventListener('change', async e => {
+      const f = e.target.files?.[0]; if (!f) return;
+      evidenceText = await f.text();
+      const n = root.querySelector('#fileName'); if (n) n.textContent = f.name;
+      const ev = root.querySelector('#evidence'); if (ev) ev.value = evidenceText;
+    });
+    root.querySelector('#copyMd')?.addEventListener('click', async () => {
+      if (!results) return;
+      await navigator.clipboard.writeText(generateMarkdownReport(results, lang));
+      toast(t(lang, 'copied'));
+    });
+    root.querySelector('#dlJson')?.addEventListener('click', () => {
+      if (!results) return;
+      const blob = new Blob([generateJSONExport(results, answerText, evidenceText)], { type: 'application/json' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `claimtape-${Date.now()}.json`; a.click();
+      toast(t(lang, 'downloaded'));
+    });
+    root.querySelectorAll('.claim').forEach(card => {
+      card.addEventListener('click', () => {
+        const id = Number(card.dataset.id);
+        activeClaim = activeClaim === id ? null : id;
+        // soft re-render results only
+        const panel = root.querySelector('#resultPanel');
+        if (panel && results) {
+          panel.innerHTML = buildResults();
+          bindResultsOnly();
+          burst(card);
+        }
+      });
+    });
+    root.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      filter = b.dataset.f;
+      const panel = root.querySelector('#resultPanel');
+      if (panel && results) { panel.innerHTML = buildResults(); bindResultsOnly(); }
+    }));
+    bindTheme();
+    bootFx();
+    applyBg();
+  }
+
+  function bindResultsOnly() {
+    root.querySelectorAll('.claim').forEach(card => {
+      card.addEventListener('click', () => {
+        const id = Number(card.dataset.id);
+        activeClaim = activeClaim === id ? null : id;
+        const panel = root.querySelector('#resultPanel');
+        if (panel && results) { panel.innerHTML = buildResults(); bindResultsOnly(); animateScore(false); }
+      });
+    });
+    root.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      filter = b.dataset.f;
+      const panel = root.querySelector('#resultPanel');
+      if (panel && results) { panel.innerHTML = buildResults(); bindResultsOnly(); animateScore(false); }
+    }));
+    root.querySelector('#copyMd')?.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(generateMarkdownReport(results, lang)); toast(t(lang, 'copied'));
+    });
+    root.querySelector('#dlJson')?.addEventListener('click', () => {
+      const blob = new Blob([generateJSONExport(results, answerText, evidenceText)], { type: 'application/json' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `claimtape-${Date.now()}.json`; a.click();
+    });
+  }
+
+  function sync() {
+    answerText = root.querySelector('#answer')?.value ?? answerText;
+    evidenceText = root.querySelector('#evidence')?.value ?? evidenceText;
+  }
+
+  function run() {
+    sync();
+    if (!answerText.trim()) {
+      root.querySelector('#answer')?.classList.add('shake');
+      setTimeout(() => root.querySelector('#answer')?.classList.remove('shake'), 500);
+      return;
+    }
+    busy = true; render();
+    // staged UX: short delay + particle burst
+    setTimeout(() => {
+      results = analyze(answerText, evidenceText);
+      busy = false; filter = 'all'; activeClaim = results.claims[0]?.id ?? null;
+      render();
+      spawnBurst();
+      root.querySelector('#resultPanel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 380);
+  }
+
+  function animateScore(anim = true) {
+    if (!results) return;
+    const target = results.score;
+    const num = root.querySelector('#scoreNum');
+    const arc = root.querySelector('#scoreArc');
+    const C = 2 * Math.PI * 52;
+    if (!num || !arc) return;
+    if (!anim) {
+      num.textContent = String(target);
+      arc.style.strokeDasharray = `${C * target / 100} ${C}`;
+      return;
+    }
+    const t0 = performance.now();
+    const dur = 900;
+    const tick = (now) => {
+      const p = Math.min(1, (now - t0) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      const v = Math.round(target * eased);
+      num.textContent = String(v);
+      arc.style.strokeDasharray = `${C * v / 100} ${C}`;
+      if (p < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  function toast(msg) {
+    const n = el(`<div class="toast">${esc(msg)}</div>`);
+    root.appendChild(n);
+    requestAnimationFrame(() => n.classList.add('show'));
+    setTimeout(() => { n.classList.remove('show'); setTimeout(() => n.remove(), 300); }, 1400);
+  }
+
+  // ---- FX canvas ----
+  let fxRaf = 0;
+  function bootFx() {
+    const c = root.querySelector('#fx');
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    const resize = () => { c.width = innerWidth * devicePixelRatio; c.height = innerHeight * devicePixelRatio; ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0); };
+    resize();
+    addEventListener('resize', resize, { passive: true });
+    if (!particles.length) {
+      for (let i = 0; i < 48; i++) particles.push(mkP());
+    }
+    cancelAnimationFrame(fxRaf);
+    const loop = () => {
+      ctx.clearRect(0, 0, innerWidth, innerHeight);
+      for (const p of particles) {
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0) p.x = innerWidth; if (p.x > innerWidth) p.x = 0;
+        if (p.y < 0) p.y = innerHeight; if (p.y > innerHeight) p.y = 0;
+        ctx.beginPath();
+        ctx.fillStyle = p.c;
+        ctx.globalAlpha = p.a;
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      fxRaf = requestAnimationFrame(loop);
+    };
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) loop();
+  }
+  function mkP() {
+    const colors = ['rgba(52,211,153,.9)', 'rgba(56,189,248,.9)', 'rgba(167,139,250,.9)', 'rgba(244,114,182,.75)'];
+    return {
+      x: Math.random() * innerWidth, y: Math.random() * innerHeight,
+      vx: (Math.random() - .5) * .35, vy: (Math.random() - .5) * .35,
+      r: Math.random() * 2.2 + .4, a: Math.random() * .35 + .08,
+      c: colors[Math.floor(Math.random() * colors.length)],
+    };
+  }
+  function spawnBurst() {
+    for (let i = 0; i < 18; i++) {
+      const p = mkP();
+      p.x = innerWidth * 0.72; p.y = innerHeight * 0.35;
+      p.vx = (Math.random() - .5) * 3; p.vy = (Math.random() - .5) * 3;
+      p.a = .7; p.r = Math.random() * 3 + 1;
+      particles.push(p);
+    }
+    if (particles.length > 90) particles.splice(0, particles.length - 90);
+  }
+  function burst() { spawnBurst(); }
+
+  function bindTheme() {
+    const pop = root.querySelector('#themePop');
+    root.querySelector('#themeBtn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (pop) pop.hidden = !pop.hidden;
+    });
+    pop?.querySelectorAll('[data-bg]').forEach(b => b.addEventListener('click', () => {
+      localStorage.setItem('ct_bg_preset', b.dataset.bg);
+      document.documentElement.dataset.bg = b.dataset.bg;
+    }));
+    root.querySelector('#bgFile')?.addEventListener('change', e => {
+      const f = e.target.files?.[0]; if (!f) return;
+      const r = new FileReader();
+      r.onload = () => { try { localStorage.setItem('ct_bg_custom', r.result); } catch {} applyBg(); };
+      r.readAsDataURL(f);
+    });
+    root.querySelector('#bgOp')?.addEventListener('input', e => {
+      localStorage.setItem('ct_bg_opacity', e.target.value);
+      document.documentElement.style.setProperty('--ct-bg-op', String(Number(e.target.value) / 100));
+    });
+    root.querySelector('#bgClear')?.addEventListener('click', () => {
+      localStorage.removeItem('ct_bg_custom'); applyBg();
+    });
+  }
+
+  function applyBg() {
+    const preset = localStorage.getItem('ct_bg_preset') || 'aurora';
+    document.documentElement.dataset.bg = preset;
+    const op = localStorage.getItem('ct_bg_opacity') || '28';
+    document.documentElement.style.setProperty('--ct-bg-op', String(Number(op) / 100));
+    const opEl = root.querySelector('#bgOp'); if (opEl) opEl.value = op;
+    const layer = root.querySelector('#customBg');
+    const custom = localStorage.getItem('ct_bg_custom');
+    if (layer) {
+      if (custom) { layer.style.backgroundImage = `url(${custom})`; layer.classList.add('on'); }
+      else { layer.style.backgroundImage = ''; layer.classList.remove('on'); }
+    }
+  }
+
   render();
 }
 
-
-// Bootstrap
 const root = document.getElementById('app');
 if (root) createApp(root);

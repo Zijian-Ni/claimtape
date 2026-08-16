@@ -1,558 +1,432 @@
-// ClaimTape Analysis Engine v1.1
-// Offline heuristics — no API required.
-// Fixes: weak keyword support, number mismatch, CN sentence split, missing reasons.
+// ClaimTape Analysis Engine v1.2
+// Offline, evidence-first. Every status must point at a concrete fact when possible.
 
-const STOP_WORDS = new Set([
-  'the', 'and', 'has', 'have', 'been', 'with', 'for', 'are', 'that', 'this',
-  'from', 'will', 'all', 'can', 'its', 'our', 'their', 'they', 'was', 'were',
-  'not', 'but', 'also', 'any', 'each', 'both', 'such', 'into', 'over', 'than',
-  'more', 'most', 'very', 'just', 'about', 'only', 'some', 'which', 'when',
-  'what', 'who', 'how', 'why', 'there', 'here', 'then', 'them', 'been',
-  'being', 'does', 'did', 'would', 'could', 'should', 'shall', 'may', 'might',
-  'must', 'upon', 'within', 'across', 'under', 'your', 'you', 'we', 'it',
-  'is', 'in', 'on', 'to', 'of', 'as', 'by', 'or', 'an', 'at', 'be',
-  // common CN function-ish short tokens filtered later by length
-]);
-
-// ───── Claim Splitter ─────
+const STOP = new Set(`the and has have been with for are that this from will all can its our their they was were not but also any each both such into over than more most very just about only some which when what who how why there here then them being does did would could should shall may might must upon within across under your you we it is in on to of as by or an at be a to`.split(/\s+/));
 
 export function splitIntoClaims(text) {
-  if (!text || !text.trim()) return [];
-
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  const claims = [];
-
+  if (!text?.trim()) return [];
+  const lines = text.replace(/\r\n/g, '\n').split('\n').map(l => l.trim()).filter(Boolean);
+  const out = [];
   for (const line of lines) {
-    // headings / separators — skip empty noise
     if (/^#{1,6}\s/.test(line) || /^[-*_]{3,}$/.test(line)) continue;
-
-    // bullet / numbered list = one claim
     if (/^[-•*▪▸►]\s+/.test(line) || /^\d+[.)、]\s*/.test(line)) {
-      const cleaned = line
-        .replace(/^[-•*▪▸►]\s+/, '')
-        .replace(/^\d+[.)、]\s*/, '')
-        .trim();
-      if (cleaned.length > 3) claims.push(cleaned);
+      const c = line.replace(/^[-•*▪▸►]\s+/, '').replace(/^\d+[.)、]\s*/, '').trim();
+      if (c.length >= 1) out.push(c);
       continue;
     }
-
-    // Chinese-aware sentence split + EN punctuation
-    const parts = line
-      .split(/(?<=[。！？!?；;])\s*|(?<=[.!?]["'”’]?)\s+(?=[A-Z0-9“"‘'])/)
+    // Prefer splitting on clear sentence boundaries; keep short clauses
+    let parts = line
+      .split(/(?<=[。！？!?；;])\s*/)
+      .flatMap(seg => seg.split(/(?<=\.)\s+(?=[A-Z0-9“"‘'《])/))
       .map(s => s.trim())
       .filter(Boolean);
-
-    if (parts.length <= 1) {
-      if (line.length > 6) claims.push(line);
-      continue;
+    // If regex didn't split (e.g. "A. B. C."), try simple ". " split
+    if (parts.length <= 1 && /\.\s+/.test(line)) {
+      parts = line.split(/\.\s+/).map(s => s.trim()).filter(Boolean).map((s, i, arr) => (i < arr.length - 1 && !/[.!?。]$/.test(s) ? s + '.' : s));
     }
-    for (const s of parts) {
-      if (s.length > 6) claims.push(s);
-    }
+    parts = parts.filter(s => s.length >= 1);
+    if (parts.length > 1) out.push(...parts);
+    else if (line.length >= 1) out.push(line);
   }
-
-  // dedupe while preserving order
   const seen = new Set();
-  return claims.filter(c => {
-    const key = c.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
+  return out.filter(c => {
+    const k = c.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
     return true;
   });
 }
 
-// ───── Evidence Parser ─────
-
-function parseEvidence(evidenceText) {
-  if (!evidenceText || !evidenceText.trim()) {
-    return { tokens: new Set(), numbers: new Map(), phrases: new Set(), raw: '', facts: [] };
-  }
-
-  const tokens = new Set();
-  const numbers = new Map(); // normalized number string -> contexts
-  const phrases = new Set();
-  const facts = [];
-
-  const lines = evidenceText.split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    try {
-      const obj = JSON.parse(trimmed);
-      extractTokensFromObj(obj, tokens, numbers, phrases, facts);
-      continue;
-    } catch {
-      // not JSON
-    }
-
-    extractTokensFromText(trimmed, tokens, numbers, phrases);
-    facts.push({ kind: 'text', text: trimmed });
-  }
-
-  return { tokens, numbers, phrases, raw: evidenceText, facts };
+function normNum(n) {
+  if (!Number.isFinite(n)) return null;
+  return Number.isInteger(n) ? n : Math.round(n * 1000) / 1000;
 }
 
-function extractTokensFromObj(obj, tokens, numbers, phrases, facts, depth = 0, path = '') {
-  if (depth > 6) return;
-  if (typeof obj === 'string') {
-    extractTokensFromText(obj, tokens, numbers, phrases);
-    facts.push({ kind: 'string', path, value: obj });
-  } else if (typeof obj === 'number' && Number.isFinite(obj)) {
-    rememberNumber(numbers, obj, path || 'value');
-    tokens.add(String(obj));
-    facts.push({ kind: 'number', path, value: obj });
-  } else if (typeof obj === 'boolean') {
-    tokens.add(String(obj));
-    facts.push({ kind: 'bool', path, value: obj });
-  } else if (Array.isArray(obj)) {
-    obj.forEach((v, i) => extractTokensFromObj(v, tokens, numbers, phrases, facts, depth + 1, `${path}[${i}]`));
-  } else if (obj && typeof obj === 'object') {
-    for (const [k, v] of Object.entries(obj)) {
-      const key = String(k).toLowerCase();
-      tokens.add(key);
-      // multiword keys as phrase
-      if (key.includes('_') || key.includes('-') || key.includes(' ')) {
-        phrases.add(key.replace(/[_-]+/g, ' '));
-      }
-      extractTokensFromObj(v, tokens, numbers, phrases, facts, depth + 1, path ? `${path}.${k}` : k);
-    }
-  }
-}
-
-function extractTokensFromText(text, tokens, numbers, phrases) {
-  const lower = text.toLowerCase();
-
-  // EN words / paths / ids
-  const words = lower.match(/[a-z0-9_./-]{3,}/g) || [];
-  words.forEach(w => tokens.add(w));
-
-  // CN tokens (2+ han)
-  const hans = text.match(/[\u4e00-\u9fff]{2,}/g) || [];
-  hans.forEach(h => tokens.add(h));
-
-  // bigrams of CN for fuzzy
-  for (const h of hans) {
-    if (h.length >= 4) {
-      for (let i = 0; i < h.length - 1; i++) tokens.add(h.slice(i, i + 2));
-    }
-  }
-
-  // numbers with optional unit / percent
-  const numRe = /([-+]?\d+(?:\.\d+)?)\s*(%|％|ms|s|sec|secs|seconds|m|min|h|x|×|k|kb|mb|gb|tb)?/gi;
+function extractNums(str) {
+  const res = [];
+  const re = /([-+]?\d+(?:\.\d+)?)\s*(%|％|ms|s|x|×|k|kb|mb|gb|tb)?/gi;
   let m;
-  while ((m = numRe.exec(text)) !== null) {
-    const n = Number(m[1]);
-    if (!Number.isFinite(n)) continue;
-    const unit = (m[2] || '').toLowerCase().replace('％', '%');
-    rememberNumber(numbers, n, unit || 'bare', m[0]);
-    tokens.add(String(n));
-    if (unit) tokens.add(`${n}${unit}`);
+  while ((m = re.exec(str))) {
+    let v = Number(m[1]);
+    let unit = (m[2] || '').toLowerCase().replace('％', '%');
+    // 0.94 accuracy → also keep as percent-ish
+    res.push({ value: normNum(v), unit, raw: m[0].trim(), index: m.index });
+    if (!unit && v > 0 && v <= 1) {
+      res.push({ value: normNum(v * 100), unit: '%', raw: `${(v * 100).toFixed(1)}%←${m[0]}`, index: m.index, derived: true });
+    }
   }
-
-  // short phrases (quoted)
-  const quoted = text.match(/["“”'‘']([^"'“”‘’]{3,80})["“”'‘']/g) || [];
-  quoted.forEach(q => phrases.add(q.replace(/^["“”'‘']|["“”'‘']$/g, '').toLowerCase()));
+  return res;
 }
 
-function rememberNumber(map, value, context = '', raw = '') {
-  const key = normalizeNumberKey(value);
-  if (!map.has(key)) map.set(key, []);
-  map.get(key).push({ value, context: String(context || ''), raw: String(raw || value) });
-}
-
-function normalizeNumberKey(n) {
-  if (!Number.isFinite(n)) return String(n);
-  // keep one decimal for floats, exact for ints
-  return Number.isInteger(n) ? String(n) : String(Math.round(n * 1000) / 1000);
-}
-
-// ───── Risk Patterns ─────
-
-const RISK_PATTERNS = [
-  {
-    id: 'bold_success',
-    regex: /\b(tests?\s+(all\s+)?pass(es|ed)?|all\s+tests?\s+pass|no\s+(known\s+)?bugs?|bug[- ]free|全部通过|测试全过|零缺陷)\b/i,
-    evidenceCheck: (_text, evTokens) => !evTokens.has('passed') && !evTokens.has('pass') && !evTokens.has('success') && !evTokens.has('通过'),
-  },
-  {
-    id: 'perfect_number',
-    regex: /\b100\s*%|\b100％|百分之百|全覆盖|零错误|zero\s+error/i,
-    evidenceCheck: () => true,
-  },
-  {
-    id: 'already_deployed',
-    regex: /\b(already|currently|now)\s+(running|deployed|live|in\s+production)|已上线|已部署|生产环境已|正式运行/i,
-    evidenceCheck: (_t, ev) => !ev.has('production') && !ev.has('deployed') && !ev.has('deploy') && !ev.has('live') && !ev.has('上线') && !ev.has('部署'),
-  },
-  {
-    id: 'no_issues',
-    regex: /\b(no\s+(known\s+)?(issues?|errors?|problems?)|zero\s+(errors?|issues?|bugs?)|无(?:任何)?(?:问题|错误|缺陷)|没有(?:已知)?(?:问题|bug))\b/i,
-    evidenceCheck: (_t, ev) => ev.has('bugs') || ev.has('errors') || ev.has('failed') || ev.has('error') || !ev.has('zero'),
-  },
-  {
-    id: 'will_work',
-    regex: /\b(will\s+(definitely\s+)?work|guaranteed|absolutely\s+(works?|correct)|always\s+works?|一定(?:能|会)(?:工作|成功)|保证(?:有效|成功)|万无一失)\b/i,
-    evidenceCheck: () => true,
-  },
-  {
-    id: 'absolute_all',
-    regex: /\b(every\s+edge\s+case|all\s+environments?|any\s+load|fully\s+implemented|complete(ly)?\s+done|所有环境|任意负载|完全实现|全部完成)\b/i,
-    evidenceCheck: () => true,
-  },
-];
-
-// ───── Helpers ─────
-
-function claimTokensOf(claim) {
-  const lower = claim.toLowerCase();
-  const en = (lower.match(/[a-z0-9_./-]{3,}/g) || []).filter(w => !STOP_WORDS.has(w));
-  const cn = claim.match(/[\u4e00-\u9fff]{2,}/g) || [];
+function tokensOf(text) {
+  const lower = String(text).toLowerCase();
+  const en = (lower.match(/[a-z][a-z0-9_./-]{2,}/g) || []).filter(w => !STOP.has(w));
+  const cn = String(text).match(/[\u4e00-\u9fff]{2,}/g) || [];
   return [...new Set([...en, ...cn])];
 }
 
-function extractClaimNumbers(claim) {
-  const out = [];
-  const re = /([-+]?\d+(?:\.\d+)?)\s*(%|％|ms|s|x|×|k|kb|mb|gb)?/gi;
-  let m;
-  while ((m = re.exec(claim)) !== null) {
-    const value = Number(m[1]);
-    if (!Number.isFinite(value)) continue;
-    const unit = (m[2] || '').toLowerCase().replace('％', '%');
-    out.push({ value, unit, raw: m[0], key: normalizeNumberKey(value) });
+const SYN = {
+  deployment: ['deploy', 'deployed', 'deployment'],
+  deployed: ['deploy', 'deployed', 'deployment'],
+  deploy: ['deploy', 'deployed', 'deployment'],
+  succeeded: ['success', 'succeeded', 'successful', 'ok', 'passed'],
+  success: ['success', 'succeeded', 'successful', 'ok', 'passed'],
+  successful: ['success', 'succeeded', 'successful', 'ok'],
+  passed: ['pass', 'passed', 'success', 'ok'],
+  pass: ['pass', 'passed', 'success'],
+  tests: ['test', 'tests', 'suite', 'unit'],
+  test: ['test', 'tests', 'suite'],
+  coverage: ['coverage', 'cover'],
+  production: ['production', 'prod', 'live'],
+  staging: ['staging', 'stage'],
+  bugs: ['bug', 'bugs', 'issue', 'issues', 'error', 'errors'],
+  bug: ['bug', 'bugs', 'issue', 'error'],
+  latency: ['latency', 'p99', 'p95', 'delay'],
+  cost: ['cost', 'costs', 'api_cost', 'reduction'],
+  accuracy: ['accuracy', 'acc'],
+  pipeline: ['pipeline', 'ci', 'cd', 'feed'],
+  green: ['green', 'success', 'passed', 'ok'],
+  operational: ['ok', 'operational', 'running', 'success'],
+  running: ['running', 'live', 'deployed', 'ok'],
+  zero: ['zero', '0', 'none'],
+  上线: ['deploy', 'production', 'live', '上线', '部署'],
+  部署: ['deploy', '部署', '上线'],
+  通过: ['pass', 'passed', 'success', '通过'],
+  测试: ['test', 'tests', '测试'],
+  覆盖率: ['coverage', '覆盖率'],
+  生产: ['production', 'prod', '生产'],
+};
+
+function expand(tok) {
+  return SYN[tok] || SYN[tok.toLowerCase()] || [tok];
+}
+
+/** Parse evidence into atomic facts with snippets */
+export function parseEvidenceFacts(evidenceText) {
+  if (!evidenceText?.trim()) return { facts: [], raw: '' };
+  const facts = [];
+  const lines = evidenceText.replace(/\r\n/g, '\n').split('\n');
+  let i = 0;
+  for (const line of lines) {
+    i += 1;
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let obj = null;
+    try { obj = JSON.parse(trimmed); } catch { /* plain */ }
+
+    if (obj && typeof obj === 'object') {
+      const flat = flatten(obj);
+      const nums = [];
+      const labels = [];
+      for (const [k, v] of Object.entries(flat)) {
+        labels.push(k);
+        if (typeof v === 'number' && Number.isFinite(v)) {
+          nums.push({ key: k, value: normNum(v), unit: guessUnit(k, v) });
+        } else if (typeof v === 'string') {
+          for (const n of extractNums(v)) nums.push({ key: k, value: n.value, unit: n.unit || guessUnit(k, n.value) });
+        }
+      }
+      const blob = JSON.stringify(obj);
+      facts.push({
+        id: `f${i}`,
+        kind: 'json',
+        line: i,
+        snippet: trimmed.length > 220 ? trimmed.slice(0, 220) + '…' : trimmed,
+        text: blob,
+        tokens: new Set(tokensOf(blob + ' ' + labels.join(' '))),
+        nums,
+        fields: flat,
+        polarity: polarityOf(blob),
+      });
+    } else {
+      const nums = extractNums(trimmed).map(n => ({ key: 'text', value: n.value, unit: n.unit }));
+      facts.push({
+        id: `f${i}`,
+        kind: 'text',
+        line: i,
+        snippet: trimmed.length > 220 ? trimmed.slice(0, 220) + '…' : trimmed,
+        text: trimmed,
+        tokens: new Set(tokensOf(trimmed)),
+        nums,
+        fields: {},
+        polarity: polarityOf(trimmed),
+      });
+    }
+  }
+  return { facts, raw: evidenceText };
+}
+
+function flatten(obj, prefix = '', out = {}, depth = 0) {
+  if (depth > 6 || obj == null) return out;
+  if (typeof obj !== 'object') {
+    out[prefix || 'value'] = obj;
+    return out;
+  }
+  if (Array.isArray(obj)) {
+    obj.forEach((v, i) => flatten(v, prefix ? `${prefix}[${i}]` : `[${i}]`, out, depth + 1));
+    return out;
+  }
+  for (const [k, v] of Object.entries(obj)) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (v && typeof v === 'object') flatten(v, key, out, depth + 1);
+    else out[key] = v;
   }
   return out;
 }
 
-function hasSpecificValues(claim) {
-  return extractClaimNumbers(claim).length > 0
-    || /\/[a-zA-Z][a-zA-Z0-9_./-]{2,}/.test(claim)
-    || /`[^`]+`/.test(claim)
-    || /\b(npm|git|curl|sudo|docker|kubectl|python|node|pnpm|yarn)\b/i.test(claim)
-    || /[\u4e00-\u9fff].{0,6}(路径|命令|接口|端口|版本)/.test(claim);
+function guessUnit(key, value) {
+  const k = key.toLowerCase();
+  if (/(percent|ratio|coverage|accuracy|rate|reduction)/.test(k)) {
+    if (typeof value === 'number' && value <= 1) return '%-fraction';
+    return '%';
+  }
+  if (/(ms|latency)/.test(k)) return 'ms';
+  if (/(sec|seconds)/.test(k)) return 's';
+  return '';
 }
 
-function findNumberConflicts(claimNums, evidenceNumbers) {
+function polarityOf(text) {
+  const t = text.toLowerCase();
+  const neg = (t.match(/\bfail(ed|ing)?\b|\berror(s)?\b|\bbug(s)?\b|\bcrash|\bdegraded\b|\brollback\b|失败|错误|缺陷/g) || []).length;
+  const pos = (t.match(/\bpass(ed)?\b|\bsuccess(ful)?\b|\bok\b|\bgreen\b|通过|成功/g) || []).length;
+  return { neg, pos };
+}
+
+const RISKS = [
+  { id: 'perfect_number', re: /\b100\s*%|100％|百分之百|全覆盖/i },
+  { id: 'bold_success', re: /\b(all\s+tests?\s+pass|tests?\s+all\s+pass|no\s+(known\s+)?bugs?|bug[- ]free|全部通过|零缺陷)\b/i },
+  { id: 'already_deployed', re: /\b(already|currently|now)\s+(running|deployed|live|in\s+production)|已上线|已部署|生产环境/i },
+  { id: 'no_issues', re: /\b(no\s+(known\s+)?(issues?|errors?|problems?|bugs?)|zero\s+(errors?|issues?|bugs?|latency)|无(?:任何)?(?:问题|错误|缺陷)|零延迟)\b/i },
+  { id: 'will_work', re: /\b(will\s+(definitely\s+)?work|guaranteed|absolutely|always\s+works?|any\s+load|一定(?:能|会)|保证|万无一失|任意负载)\b/i },
+  { id: 'absolute_all', re: /\b(every\s+edge\s+case|all\s+environments?|fully\s+implemented|complete(ly)?\s+done|所有环境|完全实现|全部完成)\b/i },
+];
+
+function claimRisks(claim) {
+  return RISKS.filter(r => r.re.test(claim)).map(r => r.id);
+}
+
+function scoreFact(claim, claimToks, claimNums, fact) {
+  let score = 0;
+  const matchedTokens = [];
+  const matchedNums = [];
   const conflicts = [];
-  const supports = [];
+
+  for (const tok of claimToks) {
+    for (const c of expand(tok)) {
+      if (fact.tokens.has(c) || fact.text.toLowerCase().includes(c)) {
+        score += tok.length >= 6 ? 2.2 : 1.4;
+        matchedTokens.push(tok);
+        break;
+      }
+    }
+  }
 
   for (const cn of claimNums) {
-    // percent special-case: 100% vs any other percent in evidence
-    if (cn.unit === '%' || /%/.test(cn.raw)) {
-      let matched = false;
-      for (const [key, arr] of evidenceNumbers.entries()) {
-        const evVal = arr[0]?.value;
-        if (evVal == null) continue;
-        const evIsPct = arr.some(a => /%|percent|coverage|rate|accuracy/i.test(a.context + a.raw));
-        // also treat bare 0-1 fractions near claim percent
-        const asPct = evVal <= 1 && evVal >= 0 ? evVal * 100 : evVal;
-        if (Math.abs(asPct - cn.value) <= 0.6 || Math.abs(evVal - cn.value) <= 0.6) {
-          matched = true;
-          supports.push({ claim: cn.raw, evidence: arr[0].raw, key });
-        } else if (evIsPct && Math.abs(asPct - cn.value) > 5) {
-          // same metric family, different value
-          if (cn.value >= 95 && asPct < 95) {
-            conflicts.push({
-              claim: cn.raw,
-              evidence: arr.map(a => a.raw).join(', '),
-              reason: `claimed ${cn.raw} but evidence shows ${arr[0].raw}`,
-            });
-          }
+    let best = null;
+    for (const fn of fact.nums) {
+      let fv = fn.value;
+      let cv = cn.value;
+      // normalize fraction percents
+      if ((cn.unit === '%' || /%/.test(cn.raw)) && fn.unit === '%-fraction') fv = fv * 100;
+      if (cn.unit === '%' && fv <= 1 && fv > 0 && fn.unit !== '%-fraction') {
+        // maybe already percent
+      }
+      if (fn.unit === '%' && cv <= 1 && cn.unit !== '%') {
+        // skip
+      }
+      const rel = Math.abs(fv - cv);
+      const tol = Math.max(0.051, Math.abs(cv) * 0.02);
+      if (rel <= tol) {
+        const s = 6 + (cn.unit === '%' ? 1 : 0);
+        if (!best || s > best.s) best = { s, fn, cv, fv, rel };
+      } else if ((cn.unit === '%' || cn.value >= 95) && /cover|accura|pass|success|rate|reduction/i.test(fn.key + String(fn.unit)) && Math.abs((fn.unit === '%-fraction' ? fv * 100 : fv) - cv) > 5) {
+        const ev = fn.unit === '%-fraction' ? fv * 100 : fv;
+        if (cv >= 95 && ev < 95) {
+          conflicts.push({
+            claim: cn.raw,
+            evidence: `${fn.key}=${fn.value}`,
+            detail: `claimed ${cn.raw} but evidence has ${fn.key}=${fn.value}`,
+          });
+          score -= 4;
         }
       }
-      if (!matched && cn.value === 100) {
-        // 100% with no matching evidence number is already risky; conflict if any lower coverage-like num exists
-        for (const [, arr] of evidenceNumbers.entries()) {
-          const evVal = arr[0]?.value;
-          const ctx = arr.map(a => a.context + a.raw).join(' ');
-          if (evVal != null && evVal < 100 && /cover|pass|accuracy|rate|success/i.test(ctx)) {
-            conflicts.push({
-              claim: cn.raw,
-              evidence: arr[0].raw,
-              reason: `claimed ${cn.raw} vs evidence ${arr[0].raw}`,
-            });
-            break;
-          }
-        }
-      }
-      continue;
     }
-
-    // exact / near number match
-    if (evidenceNumbers.has(cn.key)) {
-      supports.push({ claim: cn.raw, evidence: evidenceNumbers.get(cn.key)[0].raw, key: cn.key });
-      continue;
-    }
-    // try integer closeness
-    let foundNear = false;
-    for (const [key, arr] of evidenceNumbers.entries()) {
-      const evVal = arr[0]?.value;
-      if (evVal == null) continue;
-      if (Math.abs(evVal - cn.value) <= Math.max(0.05, cn.value * 0.01)) {
-        supports.push({ claim: cn.raw, evidence: arr[0].raw, key });
-        foundNear = true;
-        break;
-      }
-    }
-    if (!foundNear && cn.value >= 10) {
-      // large specific number with no evidence support — not auto-conflict, handled as needs_human
+    if (best) {
+      score += best.s;
+      matchedNums.push({ claim: cn.raw, evidence: `${best.fn.key}=${best.fn.value}`, key: best.fn.key });
     }
   }
 
-  return { conflicts, supports };
+  // field-name soft boost
+  const fieldStr = Object.keys(fact.fields).join(' ').toLowerCase();
+  if (/deploy|production|staging/.test(claim.toLowerCase()) && /deploy|environment|production|staging/.test(fieldStr)) score += 1.5;
+  if (/test|coverage|pass/.test(claim.toLowerCase()) && /test|pass|fail|coverage|suite/.test(fieldStr)) score += 1.5;
+
+  return { score, matchedTokens: [...new Set(matchedTokens)], matchedNums, conflicts, fact };
 }
 
-// ───── Claim Classifier ─────
+function isAbsolute(claim) {
+  return /\b(all|every|zero|no\s+|100\s*%|全部|所有|零|无(?:任何)?|任意)\b/i.test(claim);
+}
 
-/**
- * Classify a single claim against evidence.
- * Returns: { status, evidenceMatches, conflictSignals, isRisky, riskId, reasons }
- */
+function hasSpecific(claim) {
+  return extractNums(claim).length > 0
+    || /\/[\w./-]+/.test(claim)
+    || /`[^`]+`/.test(claim)
+    || /\b(npm|git|docker|kubectl|python|node|pnpm)\b/i.test(claim);
+}
+
 export function classifyClaim(claim, evidence, hasEvidence) {
-  const { tokens: evidenceTokens, numbers: evidenceNumbers, raw: evidenceRaw } = evidence;
-  const claimTokens = claimTokensOf(claim);
-  const claimNums = extractClaimNumbers(claim);
+  const claimToks = tokensOf(claim);
+  const claimNums = extractNums(claim).filter(n => !n.derived);
+  const risks = claimRisks(claim);
+  const reasons = [];
   const evidenceMatches = [];
   const conflictSignals = [];
-  const reasons = [];
-
-  let isRisky = false;
-  let riskId = null;
-  for (const pattern of RISK_PATTERNS) {
-    if (pattern.regex.test(claim)) {
-      if (!hasEvidence || pattern.evidenceCheck(claim, evidenceTokens)) {
-        isRisky = true;
-        riskId = pattern.id;
-        reasons.push(`risk:${pattern.id}`);
-      }
-    }
-  }
-
-  const specific = hasSpecificValues(claim);
+  const evidenceSnippets = [];
 
   if (!hasEvidence) {
-    if (specific) {
-      reasons.push('specific values present but no evidence provided');
-      return {
-        status: 'needs_human', evidenceMatches, conflictSignals, isRisky, riskId, reasons,
-      };
+    if (hasSpecific(claim)) {
+      reasons.push('含具体数值/路径，但未提供证据');
+      return pack('needs_human', evidenceMatches, conflictSignals, risks, reasons, evidenceSnippets, null);
     }
-    reasons.push('no evidence provided');
-    return {
-      status: 'unsupported', evidenceMatches, conflictSignals, isRisky, riskId, reasons,
-    };
+    reasons.push('未提供证据');
+    return pack(risks.length ? 'unsupported' : 'unsupported', evidenceMatches, conflictSignals, risks, reasons, evidenceSnippets, null);
   }
 
-  // light stemming / synonym bridge for common ops words
-  const synonyms = {
-    deployment: ['deploy', 'deployed', 'deployment'],
-    deployed: ['deploy', 'deployed', 'deployment'],
-    deploy: ['deploy', 'deployed', 'deployment'],
-    succeeded: ['success', 'succeeded', 'successful', 'ok', 'passed'],
-    success: ['success', 'succeeded', 'successful', 'ok'],
-    successful: ['success', 'succeeded', 'successful'],
-    passed: ['pass', 'passed', 'success'],
-    tests: ['test', 'tests', 'suite'],
-    test: ['test', 'tests', 'suite'],
-    staging: ['staging', 'stage'],
-    production: ['production', 'prod', 'live'],
-    coverage: ['coverage', 'cover'],
-  };
+  const ranked = evidence.facts
+    .map(f => scoreFact(claim, claimToks, claimNums, f))
+    .sort((a, b) => b.score - a.score);
 
-  const evidenceLower = evidenceRaw.toLowerCase();
-  for (const token of claimTokens) {
-    const cands = synonyms[token] || [token];
-    let hit = false;
-    for (const c of cands) {
-      if (evidenceTokens.has(c) || evidenceLower.includes(c)) {
-        evidenceMatches.push(token === c ? token : `${token}~${c}`);
-        hit = true;
-        break;
-      }
+  const top = ranked[0];
+  const strong = ranked.filter(r => r.score >= 4).slice(0, 3);
+
+  for (const r of strong) {
+    evidenceMatches.push(...r.matchedTokens, ...r.matchedNums.map(n => n.claim));
+    for (const c of r.conflicts) {
+      conflictSignals.push(c.evidence);
+      reasons.push(c.detail);
     }
-    if (!hit && token.length >= 4 && evidenceLower.includes(token)) {
-      evidenceMatches.push(token);
+    if (r.score >= 3) {
+      evidenceSnippets.push({
+        id: r.fact.id,
+        line: r.fact.line,
+        snippet: r.fact.snippet,
+        score: Math.round(r.score * 10) / 10,
+      });
     }
   }
 
-  // number reconciliation
-  const { conflicts: numConflicts, supports: numSupports } = findNumberConflicts(claimNums, evidenceNumbers);
-  for (const s of numSupports) {
-    if (!evidenceMatches.includes(s.key)) evidenceMatches.push(String(s.claim));
-    reasons.push(`number match: ${s.claim} ≈ ${s.evidence}`);
-  }
-  for (const c of numConflicts) {
-    conflictSignals.push(c.evidence);
-    reasons.push(`number conflict: ${c.reason}`);
-  }
-
-  // polarity conflicts — only when claim is absolute OR no supporting numbers
-  const absoluteClaim = /\b(all|every|zero|no\s+|100\s*%|全部|所有|零|无(?:任何)?)/i.test(claim);
-  const POSITIVE_CLAIMS = [
-    { claim: /pass(es|ed)?|success(ful)?|correct|no\s+bug|全部通过|测试通过/i, conflict: /fail(ed|ing)?|error|incorrect|bug|crash|失败|错误/i, absoluteOnly: true },
-    { claim: /deployed|production|live|已上线|已部署/i, conflict: /failed|rollback|回滚|失败/i, absoluteOnly: false },
-    // staging in evidence is NOT a conflict for "deployed to staging"
-    { claim: /zero\s+(error|issue|bug)|无(?:任何)?(?:问题|错误)/i, conflict: /error|issue|bug|failed|错误|缺陷/i, absoluteOnly: false },
-    { claim: /green|全部绿灯|all\s+checks?\s+green/i, conflict: /failed|red|failing|失败/i, absoluteOnly: true },
-  ];
-
-  for (const pc of POSITIVE_CLAIMS) {
-    if (!pc.claim.test(claim)) continue;
-    // If claim is not absolute and we already have strong numeric support, skip soft polarity noise
-    if (pc.absoluteOnly && !absoluteClaim && numSupports.length > 0) continue;
-    if (!absoluteClaim && numSupports.length > 0 && /pass|success|测试通过/i.test(claim)) continue;
-    const conflictMatch = evidenceLower.match(pc.conflict);
-    if (conflictMatch) {
-      // ignore "failed":0 style non-conflicts
-      const around = evidenceLower.slice(Math.max(0, conflictMatch.index - 12), conflictMatch.index + 18);
-      if (/failed"?\s*:\s*0\b|errors?"?\s*:\s*0\b/.test(around)) continue;
-      conflictSignals.push(conflictMatch[0]);
-      reasons.push(`polarity conflict with evidence token "${conflictMatch[0]}"`);
+  // Global polarity: absolute success claims vs any fail/bug facts
+  if (isAbsolute(claim) && /pass|success|no\s+bug|zero|全部通过|无(?:任何)?问题/i.test(claim)) {
+    const bad = evidence.facts.find(f => f.polarity.neg > 0 && /fail|error|bug|degraded/i.test(f.text));
+    if (bad) {
+      conflictSignals.push(bad.snippet.slice(0, 80));
+      reasons.push(`绝对化成功表述，但证据含失败/缺陷信号（L${bad.line}）`);
+      evidenceSnippets.unshift({ id: bad.id, line: bad.line, snippet: bad.snippet, score: 0 });
+      return pack('contradicted', uniq(evidenceMatches), uniq(conflictSignals), risks.length ? risks : ['bold_success'], reasons, uniqSnips(evidenceSnippets), top);
     }
   }
 
-  // unique match list
-  const uniqMatches = [...new Set(evidenceMatches)];
-  const uniqConflicts = [...new Set(conflictSignals)];
-
-  // Decision tree (stricter than v1.0)
-  if (numConflicts.length > 0) {
-    return {
-      status: 'contradicted',
-      evidenceMatches: uniqMatches,
-      conflictSignals: uniqConflicts,
-      isRisky: true,
-      riskId: riskId || 'perfect_number',
-      reasons,
-    };
+  // Number hard conflicts from top facts
+  if (top && top.conflicts.length) {
+    return pack('contradicted', uniq(evidenceMatches), uniq(conflictSignals), risks.length ? risks : ['perfect_number'], reasons, uniqSnips(evidenceSnippets), top);
   }
 
-  if (uniqConflicts.length > 0 && uniqMatches.length < 2 && numSupports.length === 0) {
-    reasons.push('conflict signals outweigh weak keyword overlap');
-    return {
-      status: 'contradicted',
-      evidenceMatches: uniqMatches,
-      conflictSignals: uniqConflicts,
-      isRisky: true,
-      riskId,
-      reasons,
-    };
-  }
-
-  // absolute positive claim + conflict evidence still contradicted even with some matches
-  if (uniqConflicts.length > 0 && absoluteClaim) {
-    reasons.push('absolute claim conflicts with evidence');
-    return {
-      status: 'contradicted',
-      evidenceMatches: uniqMatches,
-      conflictSignals: uniqConflicts,
-      isRisky: true,
-      riskId: riskId || 'bold_success',
-      reasons,
-    };
-  }
-
-  const coverageRatio = claimTokens.length > 0 ? uniqMatches.length / claimTokens.length : 0;
-  const strong = uniqMatches.filter(m => /\d/.test(m) || m.length >= 6 || /[\u4e00-\u9fff]/.test(m) || m.includes('~'));
-  const hasStrongNumber = numSupports.length > 0;
-
-  // Supported needs real signal — not a single stopword-ish hit
-  if (hasStrongNumber || (coverageRatio >= 0.28 && uniqMatches.length >= 2) || strong.length >= 2 || (uniqMatches.length >= 2 && /deploy|success|pass|staging|production/i.test(claim))) {
-    if (uniqConflicts.length > 0) {
-      reasons.push('mostly supported but residual conflict signals → human check');
-      return {
-        status: 'needs_human',
-        evidenceMatches: uniqMatches,
-        conflictSignals: uniqConflicts,
-        isRisky,
-        riskId,
-        reasons,
-      };
+  // Production claim vs staging-only evidence
+  if (/\bproduction\b|生产|已上线/i.test(claim) && !/staging/i.test(claim)) {
+    const hasProd = evidence.facts.some(f => /production|prod|live/i.test(f.text) && !/staging/i.test(JSON.stringify(f.fields)));
+    const hasStaging = evidence.facts.some(f => /staging/i.test(f.text));
+    if (!hasProd && hasStaging) {
+      reasons.push('声称 production，但证据只有 staging');
+      conflictSignals.push('environment: staging');
+      const st = evidence.facts.find(f => /staging/i.test(f.text));
+      if (st) evidenceSnippets.push({ id: st.id, line: st.line, snippet: st.snippet, score: 1 });
+      return pack('contradicted', uniq(evidenceMatches), uniq(conflictSignals), risks.includes('already_deployed') ? risks : [...risks, 'already_deployed'], reasons, uniqSnips(evidenceSnippets), top);
     }
-    reasons.push(hasStrongNumber ? 'numeric evidence aligns' : `keyword coverage ${(coverageRatio * 100).toFixed(0)}%`);
-    return {
-      status: 'supported',
-      evidenceMatches: uniqMatches,
-      conflictSignals: uniqConflicts,
-      isRisky,
-      riskId,
-      reasons,
-    };
   }
 
-  if (specific && uniqMatches.length < 2) {
-    reasons.push('specific claim lacks enough corroborating evidence');
-    return {
-      status: 'needs_human',
-      evidenceMatches: uniqMatches,
-      conflictSignals: uniqConflicts,
-      isRisky,
-      riskId,
-      reasons,
-    };
+  // 100% / zero latency special
+  if (/\b100\s*%/i.test(claim) || /zero\s+latency|零延迟/i.test(claim)) {
+    reasons.push(risks.includes('perfect_number') || /100/.test(claim) ? '完美率/零延迟类断言默认高风险' : '绝对性能断言');
+    // if evidence has counter number, contradict
+    if (conflictSignals.length || ranked.some(r => r.conflicts.length)) {
+      return pack('contradicted', uniq(evidenceMatches), uniq(conflictSignals), risks, reasons, uniqSnips(evidenceSnippets), top);
+    }
   }
 
-  if (uniqMatches.length >= 1) {
-    reasons.push('weak keyword overlap only');
-    return {
-      status: 'needs_human',
-      evidenceMatches: uniqMatches,
-      conflictSignals: uniqConflicts,
-      isRisky,
-      riskId,
-      reasons,
-    };
+  const bestScore = top?.score || 0;
+  const matchCount = uniq(evidenceMatches).length;
+
+  if (bestScore >= 6 || (bestScore >= 4.5 && matchCount >= 2)) {
+    if (conflictSignals.length) {
+      reasons.push('整体有支撑，但存在残留冲突 → 需人工看证据片段');
+      return pack('needs_human', uniq(evidenceMatches), uniq(conflictSignals), risks, reasons, uniqSnips(evidenceSnippets), top);
+    }
+    reasons.push(`命中证据 L${top.fact.line}（score ${bestScore.toFixed(1)}）`);
+    for (const n of top.matchedNums) reasons.push(`数值对齐 ${n.claim} ≈ ${n.evidence}`);
+    return pack('supported', uniq(evidenceMatches), uniq(conflictSignals), risks, reasons, uniqSnips(evidenceSnippets), top);
   }
 
-  reasons.push('no evidence keywords matched');
+  if (bestScore >= 2.5 || matchCount >= 1) {
+    reasons.push(bestScore ? `弱匹配证据 L${top.fact.line}（score ${bestScore.toFixed(1)}）` : '仅有弱关键词重合');
+    return pack('needs_human', uniq(evidenceMatches), uniq(conflictSignals), risks, reasons, uniqSnips(evidenceSnippets), top);
+  }
+
+  if (hasSpecific(claim)) {
+    reasons.push('具体断言未在证据中找到对应事实');
+    return pack('needs_human', [], uniq(conflictSignals), risks, reasons, [], top);
+  }
+
+  reasons.push('证据中无支撑');
+  return pack('unsupported', [], uniq(conflictSignals), risks, reasons, [], top);
+}
+
+function pack(status, evidenceMatches, conflictSignals, risks, reasons, evidenceSnippets, top) {
   return {
-    status: 'unsupported',
-    evidenceMatches: [],
-    conflictSignals: uniqConflicts,
-    isRisky,
-    riskId,
+    status,
+    evidenceMatches,
+    conflictSignals,
+    isRisky: risks.length > 0 || status === 'contradicted',
+    riskId: risks[0] || null,
+    riskIds: risks,
     reasons,
+    evidenceSnippets: evidenceSnippets || [],
+    bestFactId: top?.fact?.id || null,
   };
 }
 
-// ───── Trust Score ─────
+function uniq(a) { return [...new Set(a.filter(Boolean))]; }
+function uniqSnips(a) {
+  const m = new Map();
+  for (const s of a) if (s?.id && !m.has(s.id)) m.set(s.id, s);
+  return [...m.values()].slice(0, 4);
+}
 
 export function computeTrustScore(results) {
   if (!results.length) return 0;
-
-  const weights = { supported: 1.0, needs_human: 0.45, unsupported: 0.12, contradicted: 0.0 };
-  const rawScore = results.reduce((sum, r) => sum + (weights[r.status] ?? 0.2), 0) / results.length;
-
-  const riskCount = results.filter(r => r.isRisky).length;
-  const contradictedCount = results.filter(r => r.status === 'contradicted').length;
-  const riskPenalty = Math.min(riskCount * 6 + contradictedCount * 8, 40);
-
-  const hasEvidence = results.some(r => (r.evidenceMatches?.length || 0) > 0);
-  const evidenceBonus = hasEvidence ? 4 : -12;
-
-  // absolute-language density penalty
-  const absPenalty = Math.min(results.filter(r => r.riskId === 'will_work' || r.riskId === 'absolute_all' || r.riskId === 'perfect_number').length * 3, 12);
-
-  const score = Math.round(rawScore * 100 - riskPenalty + evidenceBonus - absPenalty);
-  return Math.max(0, Math.min(100, score));
+  const w = { supported: 1, needs_human: 0.42, unsupported: 0.1, contradicted: 0 };
+  const base = results.reduce((s, r) => s + (w[r.status] ?? 0.2), 0) / results.length;
+  const riskN = results.filter(r => r.isRisky).length;
+  const contra = results.filter(r => r.status === 'contradicted').length;
+  const hasEv = results.some(r => (r.evidenceMatches?.length || 0) > 0 || (r.evidenceSnippets?.length || 0) > 0);
+  let score = base * 100 - Math.min(42, riskN * 6 + contra * 10) + (hasEv ? 3 : -14);
+  // density of absolute language
+  score -= Math.min(12, results.filter(r => r.riskIds?.some(id => ['will_work', 'absolute_all', 'perfect_number'].includes(id))).length * 3);
+  return Math.max(0, Math.min(100, Math.round(score)));
 }
-
-// ───── Main Analyze ─────
 
 export function analyze(answerText, evidenceText) {
   const claims = splitIntoClaims(answerText);
-  const evidence = parseEvidence(evidenceText);
-  const hasEvidence = !!(evidenceText && evidenceText.trim().length > 0);
-
+  const evidence = parseEvidenceFacts(evidenceText);
+  const hasEvidence = !!(evidenceText && evidenceText.trim());
   const results = claims.map((claim, i) => ({
     id: i + 1,
     claim,
     ...classifyClaim(claim, evidence, hasEvidence),
   }));
-
   const score = computeTrustScore(results);
-  const riskFlags = [...new Set(results.filter(r => r.isRisky && r.riskId).map(r => r.riskId))];
-
+  const riskFlags = uniq(results.flatMap(r => r.riskIds || (r.riskId ? [r.riskId] : [])));
   const stats = {
     total: results.length,
     supported: results.filter(r => r.status === 'supported').length,
@@ -560,71 +434,41 @@ export function analyze(answerText, evidenceText) {
     contradicted: results.filter(r => r.status === 'contradicted').length,
     needs_human: results.filter(r => r.status === 'needs_human').length,
   };
-
   return {
     claims: results,
     score,
     stats,
     riskFlags,
-    hasEvidence: !!hasEvidence,
-    version: '1.1.0',
+    hasEvidence,
+    factCount: evidence.facts.length,
+    version: '1.2.0',
   };
 }
 
-// ───── Reports ─────
-
-export function generateMarkdownReport(results, lang = 'en') {
+export function generateMarkdownReport(results) {
   const { claims, score, stats, riskFlags, hasEvidence } = results;
-  const now = new Date().toISOString();
-  const badgeText = {
-    supported: '✅ Supported',
-    unsupported: '⚠️ Unsupported',
-    contradicted: '❌ Contradicted',
-    needs_human: '🔍 Needs Human',
-  };
-
-  let md = `# ClaimTape Report\n\n`;
-  md += `**Generated:** ${now}  \n`;
-  md += `**Trust Score:** ${score}/100  \n`;
-  md += `**Evidence:** ${hasEvidence ? 'Provided' : 'Not provided'}  \n`;
-  md += `**Engine:** v1.1  \n\n`;
-
-  md += `## Summary\n\n`;
-  md += `| Metric | Count |\n|--------|-------|\n`;
-  md += `| Total Claims | ${stats.total} |\n`;
-  md += `| ✅ Supported | ${stats.supported} |\n`;
-  md += `| ⚠️ Unsupported | ${stats.unsupported} |\n`;
-  md += `| ❌ Contradicted | ${stats.contradicted} |\n`;
-  md += `| 🔍 Needs Human | ${stats.needs_human} |\n\n`;
-
-  if (riskFlags.length > 0) {
-    md += `## ⚠️ Risk Flags\n\n`;
-    riskFlags.forEach(f => { md += `- \`${f}\`\n`; });
-    md += '\n';
+  const badge = { supported: '✅', unsupported: '⚠️', contradicted: '❌', needs_human: '🔍' };
+  let md = `# ClaimTape Report\n\n**Trust Score:** ${score}/100  \n**Evidence:** ${hasEvidence ? 'yes' : 'no'}  \n**Engine:** v1.2\n\n`;
+  md += `| Metric | n |\n|---|---|\n| Total | ${stats.total} |\n| Supported | ${stats.supported} |\n| Unsupported | ${stats.unsupported} |\n| Contradicted | ${stats.contradicted} |\n| Needs human | ${stats.needs_human} |\n\n`;
+  if (riskFlags.length) md += `## Risks\n${riskFlags.map(f => `- \`${f}\``).join('\n')}\n\n`;
+  md += `## Claims\n\n`;
+  for (const c of claims) {
+    md += `### ${badge[c.status] || ''} Claim ${c.id}\n\n> ${c.claim}\n\n`;
+    if (c.reasons?.length) md += `**Why:** ${c.reasons.join('; ')}\n\n`;
+    if (c.evidenceSnippets?.length) {
+      md += `**Evidence snippets:**\n`;
+      for (const s of c.evidenceSnippets) md += `- L${s.line}: \`${s.snippet.replace(/`/g, "'")}\`\n`;
+      md += '\n';
+    }
   }
-
-  md += `## Claim-by-Claim Analysis\n\n`;
-  claims.forEach(c => {
-    md += `### Claim ${c.id}: ${badgeText[c.status] || c.status}\n\n`;
-    md += `> ${c.claim}\n\n`;
-    if (c.reasons?.length) md += `**Why:** ${c.reasons.join('; ')}  \n`;
-    if (c.evidenceMatches.length > 0) md += `**Evidence matches:** ${c.evidenceMatches.join(', ')}  \n`;
-    if (c.conflictSignals.length > 0) md += `**Conflict signals:** ${c.conflictSignals.join(', ')}  \n`;
-    md += '\n';
-  });
-
-  md += `---\n*Generated by [ClaimTape](https://github.com/Zijian-Ni/claimtape) — local, private, no API key.*\n`;
+  md += `---\n*ClaimTape local report*\n`;
   return md;
 }
 
 export function generateJSONExport(results, answerText, evidenceText) {
   return JSON.stringify({
-    meta: { tool: 'ClaimTape', version: '1.1.0', generated: new Date().toISOString() },
-    input: {
-      answerLength: answerText?.length ?? 0,
-      evidenceLength: evidenceText?.length ?? 0,
-      hasEvidence: !!(evidenceText?.trim()),
-    },
+    meta: { tool: 'ClaimTape', version: '1.2.0', generated: new Date().toISOString() },
+    input: { answerLength: answerText?.length ?? 0, evidenceLength: evidenceText?.length ?? 0, hasEvidence: !!evidenceText?.trim() },
     score: results.score,
     stats: results.stats,
     riskFlags: results.riskFlags,

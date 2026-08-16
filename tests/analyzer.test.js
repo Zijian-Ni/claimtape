@@ -1,129 +1,58 @@
-// ClaimTape — Analyzer Unit Tests v1.1
-// Run: node tests/analyzer.test.js
+import { splitIntoClaims, analyze, computeTrustScore } from '../src/analyzer.js';
 
-import { splitIntoClaims, analyze, computeTrustScore, classifyClaim } from '../src/analyzer.js';
+let passed = 0, failed = 0;
+const assert = (c, m) => { if (c) { console.log('  ✅', m); passed++; } else { console.error('  ❌', m); failed++; } };
+const eq = (a, b, m) => assert(a === b, `${m} (${a})`);
 
-let passed = 0;
-let failed = 0;
+console.log('\n── split ──');
+assert(splitIntoClaims('A. B. C.').length >= 3, 'EN sentences');
+assert(splitIntoClaims('- a\n- b\n- c').length === 3, 'bullets');
+eq(splitIntoClaims('').length, 0, 'empty');
+assert(splitIntoClaims('系统已经上线。测试全部通过。覆盖率是100%。').length >= 3, 'CN split');
 
-function assert(condition, msg) {
-  if (condition) {
-    console.log(`  ✅ ${msg}`);
-    passed++;
-  } else {
-    console.error(`  ❌ FAIL: ${msg}`);
-    failed++;
-  }
-}
-
-function assertEq(a, b, msg) {
-  if (a === b) {
-    console.log(`  ✅ ${msg} (${a})`);
-    passed++;
-  } else {
-    console.error(`  ❌ FAIL: ${msg} — expected ${b}, got ${a}`);
-    failed++;
-  }
-}
-
-// ── splitIntoClaims ──
-console.log('\n── splitIntoClaims ──');
-
-const claims1 = splitIntoClaims('All tests pass. The system is deployed. Coverage is 100%.');
-assert(claims1.length >= 3, 'splits sentence-terminated text into 3+ claims');
-
-const claims2 = splitIntoClaims('- First item\n- Second item\n- Third item');
-assert(claims2.length === 3, 'splits bullet list into 3 claims');
-
-const claims3 = splitIntoClaims('');
-assertEq(claims3.length, 0, 'empty string gives 0 claims');
-
-const claimsCN = splitIntoClaims('系统已经上线。测试全部通过。覆盖率是100%。');
-assert(claimsCN.length >= 3, 'splits Chinese sentences by 。');
-
-// ── analyze — no evidence ──
-console.log('\n── analyze — no evidence ──');
-
+console.log('\n── no evidence ──');
 const r1 = analyze('The system works. All tests pass.', '');
-assert(r1.claims.length >= 2, 'produces claims from simple text');
-assert(r1.score >= 0 && r1.score <= 100, 'score in 0-100 range');
-assert(r1.stats.total >= 2, 'stats.total >= 2');
-assert(!r1.hasEvidence, 'hasEvidence = false when no evidence');
-
+assert(r1.claims.length >= 2, 'claims');
+assert(r1.score >= 0 && r1.score <= 100, 'score range');
+assert(!r1.hasEvidence, 'no evidence flag');
 const r2 = analyze('Coverage is 100%. No bugs detected.', '');
-const hasBoldSuccessRisk = r2.riskFlags.some(f => f === 'bold_success' || f === 'perfect_number' || f === 'no_issues');
-assert(hasBoldSuccessRisk, 'detects bold_success / perfect_number / no_issues risk flags');
+assert(r2.riskFlags.some(f => ['perfect_number', 'bold_success', 'no_issues'].includes(f)), 'risk flags');
 
-// ── analyze — with evidence ──
-console.log('\n── analyze — with evidence ──');
-
+console.log('\n── with evidence ──');
 const evidence = `{"event":"test_run","passed":47,"failed":3,"coverage":78.4}
 {"event":"deploy","environment":"staging","status":"success"}
 tests passed 47 of 50`;
-
 const r3 = analyze('47 tests passed. Deployment succeeded on staging.', evidence);
-assert(r3.hasEvidence, 'hasEvidence = true');
-assert(r3.stats.supported >= 1, 'at least one supported claim when evidence matches');
-assert(r3.claims.some(c => c.reasons?.length), 'claims include reasons');
+assert(r3.hasEvidence, 'has evidence');
+assert(r3.stats.supported >= 1, 'supported >= 1');
+assert(r3.claims.some(c => c.reasons?.length), 'reasons');
+assert(r3.claims.some(c => c.evidenceSnippets?.length), 'snippets');
 
-// ── number conflict: 100% vs 78.4 ──
-console.log('\n── number conflict ──');
-
+console.log('\n── number / production conflicts ──');
 const rNum = analyze('We achieved 100% test coverage.', evidence);
-const numContra = rNum.claims.filter(c => c.status === 'contradicted' || c.isRisky);
-assert(numContra.length >= 1, '100% vs evidence coverage is contradicted or risky');
-assert(rNum.riskFlags.includes('perfect_number') || rNum.claims.some(c => c.status === 'contradicted'),
-  'flags perfect_number or contradicts on 100% coverage');
+assert(rNum.claims.some(c => c.status === 'contradicted' || c.isRisky), '100% risky/contra');
+const rProd = analyze('The system is already running in production.', evidence);
+assert(rProd.claims.some(c => c.status === 'contradicted' || c.riskIds?.includes('already_deployed') || c.riskId === 'already_deployed'), 'prod vs staging');
 
-// ── contradicted claim ──
-console.log('\n── contradicted claim ──');
-
+console.log('\n── absolute contradicted ──');
 const r4 = analyze('All tests pass with no failures.', '{"failed":3,"errors":7}');
-const contradicted = r4.claims.filter(c => c.status === 'contradicted');
-assert(contradicted.length >= 1, 'detects contradicted claim when evidence has failures');
+assert(r4.claims.some(c => c.status === 'contradicted'), 'absolute vs failures');
 
-// ── risk pattern: already deployed ──
-console.log('\n── risk patterns ──');
+console.log('\n── risks ──');
+assert(analyze('The system is already running in production.', '').riskFlags.includes('already_deployed'), 'already_deployed');
+assert(analyze('This will definitely work in all cases.', '').riskFlags.some(f => f === 'will_work' || f === 'absolute_all'), 'will_work');
+assert(analyze('We achieved 100% test coverage.', '').riskFlags.includes('perfect_number'), 'perfect');
 
-const r5 = analyze('The system is already running in production.', '');
-assert(r5.riskFlags.includes('already_deployed'), 'flags already_deployed');
-
-const r6 = analyze('This will definitely work in all cases.', '');
-assert(r6.riskFlags.includes('will_work') || r6.riskFlags.includes('absolute_all'), 'flags will_work/absolute_all');
-
-const r7 = analyze('We achieved 100% test coverage.', '');
-assert(r7.riskFlags.includes('perfect_number'), 'flags perfect_number');
-
-// ── demo-like overclaim should not score high ──
-console.log('\n── demo overclaim score ──');
-
-const demoAnswer = `The Aurora Orchestra recommendation system has been fully implemented and is already running in production.
+console.log('\n── demo overclaim ──');
+const demoA = `The Aurora Orchestra recommendation system has been fully implemented and is already running in production.
 All unit tests pass with 100% coverage, and there are no known bugs in the codebase.`;
-const demoEv = `{"passed":47,"failed":3,"coverage":78.4}
-{"environment":"staging","status":"success"}
-{"open_bugs":4}`;
-const rDemo = analyze(demoAnswer, demoEv);
-assert(rDemo.score < 55, `overclaim demo score stays low (got ${rDemo.score})`);
-assert(rDemo.stats.contradicted + rDemo.stats.unsupported + rDemo.stats.needs_human >= 1,
-  'overclaim produces non-supported claims');
+const demoE = `{"passed":47,"failed":3,"coverage":78.4}\n{"environment":"staging","status":"success"}\n{"open_bugs":4}`;
+const rDemo = analyze(demoA, demoE);
+assert(rDemo.score < 45, `overclaim low score got ${rDemo.score}`);
 
-// ── trust score ──
-console.log('\n── trust score ──');
+console.log('\n── score ──');
+assert(computeTrustScore([{ status: 'supported', isRisky: false, evidenceMatches: ['a'] }, { status: 'supported', isRisky: false, evidenceMatches: ['b'] }]) >= 80, 'high');
+assert(computeTrustScore([{ status: 'contradicted', isRisky: true, evidenceMatches: [] }, { status: 'contradicted', isRisky: false, evidenceMatches: [] }]) <= 20, 'low');
 
-const allSupported = [
-  { status: 'supported', isRisky: false, evidenceMatches: ['a', 'b'] },
-  { status: 'supported', isRisky: false, evidenceMatches: ['c'] },
-];
-const highScore = computeTrustScore(allSupported);
-assert(highScore >= 80, `all-supported score >= 80 (got ${highScore})`);
-
-const allContradicted = [
-  { status: 'contradicted', isRisky: true, riskId: 'bold_success', evidenceMatches: [] },
-  { status: 'contradicted', isRisky: false, evidenceMatches: [] },
-];
-const lowScore = computeTrustScore(allContradicted);
-assert(lowScore <= 20, `all-contradicted score <= 20 (got ${lowScore})`);
-
-// ── Summary ──
-console.log(`\n── Results: ${passed} passed, ${failed} failed ──\n`);
-if (failed > 0) process.exit(1);
+console.log(`\n── ${passed} passed, ${failed} failed ──\n`);
+if (failed) process.exit(1);
