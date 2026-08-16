@@ -9,7 +9,7 @@ Paste any AI-generated answer. Get a claim-by-claim trust report — instantly, 
 [![No API Key](https://img.shields.io/badge/API%20key-not%20required-brightgreen.svg)](#)
 [![Works Offline](https://img.shields.io/badge/offline-ready-purple.svg)](#)
 
-**[Try it live →](https://yourusername.github.io/claimtape)**
+**[Try it live →](https://zijian-ni.github.io/claimtape)**
 
 ---
 

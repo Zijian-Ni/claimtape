@@ -1,8 +1,24 @@
-// ClaimTape Analysis Engine v1.3
+// ClaimTape Analysis Engine v2.0
+//
+// WHAT THIS TOOL IS (read before changing scoring):
+//   A human-review PRIORITISER. It tells you which sentence to check first.
+//   It does NOT decide what is true. The headline number is EVIDENCE COVERAGE
+//   — how much of a claim is backed by the supplied evidence — not a truth
+//   score. Anything in this file that implies otherwise is a bug.
+//
 // Two modes:
-//  A) WITH evidence  → verify factual claims against facts (strict)
-//  B) WITHOUT evidence → epistemic audit: fact vs opinion, hedging, overclaim
+//  A) WITH evidence  → match claims against supplied facts (strict)
+//  B) WITHOUT evidence → epistemic audit only, and NO coverage number is
+//     produced, because coverage against zero evidence is meaningless.
 // Never pretends API-level omniscience; always separates "unverified" from "false".
+
+import { tokenize, splitSentences, buildTokenIndex, mergeSpans, hasCJK } from './tokenize.js';
+import {
+  negationPolarity,
+  findNumericConflicts,
+  findPolarityConflict,
+  describeNumericConflict,
+} from './polarity.js';
 
 const STOP = new Set(`the and has have been with for are that this from will all can its our their they was were not but also any each both such into over than more most very just about only some which when what who how why there here then them being does did would could should shall may might must upon within across under your you we it is in on to of as by or an at be a to`.split(/\s+/));
 
@@ -109,11 +125,13 @@ function extractNums(str) {
   return res;
 }
 
+// CT-4: delegate to the shared tokenizer so Chinese text produces real word
+// tokens instead of nothing. The old implementation grabbed whole CJK runs
+// (`系统已经上线` as ONE token), which almost never matched evidence — every
+// Chinese claim scored zero coverage and got flagged. That is a false
+// accusation, not a safe default.
 function tokensOf(text) {
-  const lower = String(text).toLowerCase();
-  const en = (lower.match(/[a-z][a-z0-9_./-]{2,}/g) || []).filter(w => !STOP.has(w));
-  const cn = String(text).match(/[\u4e00-\u9fff]{2,}/g) || [];
-  return [...new Set([...en, ...cn])];
+  return tokenize(text).filter(w => !STOP.has(w));
 }
 
 const SYN = {
@@ -129,7 +147,7 @@ const SYN = {
 function expand(tok) { return SYN[tok] || SYN[tok.toLowerCase()] || [tok]; }
 
 export function parseEvidenceFacts(evidenceText) {
-  if (!evidenceText?.trim()) return { facts: [], raw: '' };
+  if (!evidenceText?.trim()) return { facts: [], raw: '', tokenIndex: new Map(), sentences: [] };
   const facts = [];
   const lines = evidenceText.replace(/\r\n/g, '\n').split('\n');
   let i = 0;
@@ -155,7 +173,80 @@ export function parseEvidenceFacts(evidenceText) {
       facts.push({ id: `f${i}`, kind: 'text', line: i, snippet: clip(trimmed, 240), text: trimmed, tokens: new Set(tokensOf(trimmed)), nums, fields: {}, polarity: polarityOf(trimmed) });
     }
   }
-  return { facts, raw: evidenceText };
+  // CT-2: character-offset index so a matched claim can be highlighted at its
+  // real location in the evidence pane, instead of the UI re-searching for it.
+  return {
+    facts,
+    raw: evidenceText,
+    tokenIndex: buildTokenIndex(evidenceText),
+    sentences: splitSentences(evidenceText),
+  };
+}
+
+/**
+ * CT-2: locate a claim's supporting tokens inside the evidence text.
+ * @returns {{spans: Array<{start:number,end:number}>, coverage: number, matched: string[]}}
+ */
+export function locateEvidence(claim, evidence) {
+  const toks = tokensOf(claim);
+  if (!toks.length || !evidence?.tokenIndex) return { spans: [], coverage: 0, matched: [] };
+
+  const spans = [];
+  const matched = [];
+  for (const tok of toks) {
+    let locs = evidence.tokenIndex.get(tok.toLowerCase());
+    if (!locs) {
+      for (const syn of expand(tok)) {
+        locs = evidence.tokenIndex.get(String(syn).toLowerCase());
+        if (locs) break;
+      }
+    }
+    if (locs?.length) {
+      matched.push(tok);
+      spans.push(...locs.slice(0, 3));
+    }
+  }
+  // Numbers are the highest-signal spans, so index them explicitly too.
+  for (const n of extractNums(claim).filter(x => !x.derived)) {
+    const locs = evidence.tokenIndex.get(String(n.raw).toLowerCase());
+    if (locs?.length) spans.push(...locs.slice(0, 3));
+  }
+
+  return {
+    spans: mergeSpans(spans).slice(0, 12),
+    coverage: toks.length ? matched.length / toks.length : 0,
+    matched: [...new Set(matched)],
+  };
+}
+
+/**
+ * CT-3: the two conflict classes that keyword overlap structurally cannot see.
+ * Both turn a would-be green tick into a flag, so they run on every claim that
+ * has any evidence footprint at all.
+ */
+function detectConflicts(claim, evidence, located) {
+  const out = { numeric: [], polarity: null };
+  if (!evidence?.raw) return out;
+
+  out.numeric = findNumericConflicts(claim, evidence.raw);
+
+  // Compare against the single most similar evidence sentence, not the whole
+  // document: a corpus containing both "passed" and "failed" somewhere would
+  // otherwise always look contradictory.
+  let best = null;
+  for (const s of evidence.sentences ?? []) {
+    const sTok = new Set(tokensOf(s.text));
+    if (!sTok.size) continue;
+    const cTok = tokensOf(claim);
+    if (!cTok.length) continue;
+    const overlap = cTok.filter(t => sTok.has(t)).length / cTok.length;
+    if (!best || overlap > best.overlap) best = { sentence: s, overlap };
+  }
+  if (best && best.overlap > 0.5) {
+    out.polarity = findPolarityConflict(claim, best.sentence.text, best.overlap);
+    if (out.polarity) out.polarity.sentence = best.sentence;
+  }
+  return out;
 }
 
 function clip(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
@@ -296,6 +387,10 @@ function isAbsolute(claim) { return ABSOLUTE_RE.test(claim) || /\b(all|every|zer
 function pack(status, opts) {
   return {
     status,
+    // CT-2: character offsets into the evidence text so the UI can highlight
+    // the exact passage rather than guessing where the match came from.
+    spans: opts.spans || [],
+    conflictKind: opts.conflictKind || null,
     kind: opts.kind || 'assessment',
     evidenceMatches: opts.evidenceMatches || [],
     conflictSignals: opts.conflictSignals || [],
@@ -364,6 +459,50 @@ function classifyWithEvidence(claim, evidence) {
   if ((kind === 'opinion' || kind === 'framework') && !claimNums.length && !/pass|deploy|coverage|latency|bug|error|准确|覆盖|上线|测试|production|staging|pipeline|ci\/cd|operational|running|implemented/i.test(claim)) {
     reasons.push('建议/架构类内容：证据日志通常无法直接证实或证伪');
     return pack('opinion', { kind, risks, reasons, confidence: 0.55 });
+  }
+
+  // CT-2 / CT-3: locate the claim inside the evidence and run the two conflict
+  // detectors that pure keyword overlap structurally cannot see.
+  const located = locateEvidence(claim, evidence);
+  const detected = detectConflicts(claim, evidence, located);
+
+  // A number that flatly disagrees inside the SAME metric family outranks any
+  // amount of keyword overlap: "coverage 95%" vs "coverage: 62%" shares every
+  // token, which is exactly why overlap scoring used to call it supported.
+  if (detected.numeric.length) {
+    for (const c of detected.numeric) {
+      reasons.push(describeNumericConflict(c, hasCJK(claim) ? 'zh' : 'en'));
+      conflictSignals.push(c.evidence.raw);
+    }
+    return pack('contradicted', {
+      kind: 'factual',
+      risks,
+      reasons,
+      evidenceMatches: located.matched,
+      conflictSignals: uniq(conflictSignals),
+      evidenceSnippets: uniqSnips(evidenceSnippets),
+      confidence: 0.88,
+      spans: located.spans,
+      conflictKind: 'numeric',
+    });
+  }
+
+  // Same subject, opposite polarity — "tests do not pass" vs "all tests pass".
+  if (detected.polarity) {
+    const p = detected.polarity;
+    reasons.push(hasCJK(claim) ? p.detailZh : p.detail);
+    conflictSignals.push(clip(p.sentence.text, 100));
+    return pack('contradicted', {
+      kind: 'factual',
+      risks,
+      reasons,
+      evidenceMatches: located.matched,
+      conflictSignals: uniq(conflictSignals),
+      evidenceSnippets: [{ id: 'p0', line: 0, snippet: clip(p.sentence.text, 240), score: 0 }],
+      confidence: 0.82,
+      spans: [{ start: p.sentence.start, end: p.sentence.end }],
+      conflictKind: 'polarity',
+    });
   }
 
   const ranked = evidence.facts.map(f => scoreFact(claim, claimToks, claimNums, f)).sort((a, b) => b.score - a.score);
@@ -515,6 +654,7 @@ function classifyWithEvidence(claim, evidence) {
       return pack('needs_human', {
         kind, risks, reasons, evidenceMatches: uniq(evidenceMatches), conflictSignals: uniq(conflictSignals),
         evidenceSnippets: uniqSnips(evidenceSnippets), bestFactId: top?.fact?.id, confidence: 0.55,
+        spans: located.spans,
       });
     }
     reasons.push(`命中证据 L${top.fact.line}（score ${bestScore.toFixed(1)}）`);
@@ -522,6 +662,7 @@ function classifyWithEvidence(claim, evidence) {
     return pack('supported', {
       kind: 'factual', risks, reasons, evidenceMatches: uniq(evidenceMatches), conflictSignals: [],
       evidenceSnippets: uniqSnips(evidenceSnippets), bestFactId: top.fact.id, confidence: Math.min(0.95, 0.55 + bestScore / 20),
+      spans: located.spans,
     });
   }
 
@@ -530,6 +671,7 @@ function classifyWithEvidence(claim, evidence) {
     return pack('needs_human', {
       kind, risks, reasons, evidenceMatches: uniq(evidenceMatches), conflictSignals: uniq(conflictSignals),
       evidenceSnippets: uniqSnips(evidenceSnippets), bestFactId: top?.fact?.id, confidence: 0.45,
+      spans: located.spans,
     });
   }
 
@@ -558,13 +700,19 @@ export function classifyClaim(claim, evidence, hasEvidence) {
 }
 
 /**
- * Trust score philosophy v1.3:
- * - contradicted hurts a lot
- * - supported helps
- * - opinion/assessment without evidence is NEUTRAL-ISH (not free points, not zero)
- * - unverified factual is low but not automatic total zero unless many
+ * EVIDENCE COVERAGE (formerly "trust score" — see CT-1).
+ *
+ * This number answers exactly one question: how much of what the AI asserted
+ * can be located in the evidence you supplied? It is NOT a truth judgement.
+ * A confident lie backed by a matching log line scores high; a correct claim
+ * with no supporting log scores low. That is the intended behaviour, and it is
+ * why the disclaimer under the score is permanent and non-collapsible.
+ *
+ * Returns null when there is no evidence: coverage against nothing is not
+ * zero, it is undefined, and rendering "0/100" there reads as an accusation.
  */
-export function computeTrustScore(results, { hasEvidence } = {}) {
+export function computeEvidenceCoverage(results, { hasEvidence } = {}) {
+  if (!hasEvidence) return null;
   if (!results.length) return 0;
   const weights = {
     supported: 1.0,
@@ -578,20 +726,45 @@ export function computeTrustScore(results, { hasEvidence } = {}) {
   const base = results.reduce((s, r) => s + (weights[r.status] ?? 0.4), 0) / results.length;
   const contra = results.filter(r => r.status === 'contradicted').length;
   const riskN = results.filter(r => r.isRisky).length;
-  const factualUnverified = results.filter(r => r.status === 'unverified' || (r.status === 'unsupported' && r.kind === 'factual')).length;
   const supported = results.filter(r => r.status === 'supported').length;
 
   let score = base * 100;
   score -= Math.min(36, contra * 12);
   score -= Math.min(18, riskN * 4);
-  if (hasEvidence) score += Math.min(8, supported * 2);
-  else {
-    // pure advice docs shouldn't collapse to 0
-    const opinionRatio = results.filter(r => r.status === 'opinion' || r.status === 'assessment').length / results.length;
-    if (opinionRatio >= 0.5) score = Math.max(score, 48 - contra * 10 - riskN * 3);
-    score -= Math.min(12, factualUnverified * 2);
-  }
+  score += Math.min(8, supported * 2);
   return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+/**
+ * Back-compat alias. The old name asserted a truth verdict the engine cannot
+ * deliver; it is kept only so existing embeds do not break, and it now shares
+ * the corrected semantics (null when there is no evidence).
+ * @deprecated use computeEvidenceCoverage
+ */
+export const computeTrustScore = computeEvidenceCoverage;
+
+/**
+ * The review queue (CT-1 north star): the order a human should check things in.
+ * Conflicts first, then unverified factual claims, then risky phrasing.
+ * This ordering IS the product — the score is only a summary of it.
+ */
+export function buildReviewQueue(results) {
+  const priority = {
+    contradicted: 0,
+    needs_human: 1,
+    unverified: 2,
+    unsupported: 2,
+    assessment: 3,
+    opinion: 4,
+    supported: 5,
+  };
+  return [...results]
+    .filter(r => (priority[r.status] ?? 9) <= 2 || r.isRisky)
+    .sort((a, b) => {
+      const pa = (priority[a.status] ?? 9) - (a.isRisky ? 0.5 : 0);
+      const pb = (priority[b.status] ?? 9) - (b.isRisky ? 0.5 : 0);
+      return pa - pb || a.id - b.id;
+    });
 }
 
 export function analyze(answerText, evidenceText) {
@@ -612,7 +785,7 @@ export function analyze(answerText, evidenceText) {
     }
   }
 
-  const score = computeTrustScore(results, { hasEvidence });
+  const coverage = computeEvidenceCoverage(results, { hasEvidence });
   const riskFlags = uniq(results.flatMap(r => r.riskIds || (r.riskId ? [r.riskId] : [])));
   const stats = {
     total: results.length,
@@ -627,58 +800,97 @@ export function analyze(answerText, evidenceText) {
 
   const mode = hasEvidence ? 'evidence-verify' : 'epistemic-audit';
   const summary = hasEvidence
-    ? `证据核验模式：对照 ${evidence.facts.length} 条证据事实。矛盾 ${stats.contradicted} · 有支撑 ${stats.supported} · 需人工 ${stats.needs_human}`
-    : `认知审计模式（无证据）：不把建议文打成全假。意见 ${stats.opinion} · 评估 ${stats.assessment} · 未证实事实 ${stats.unverified} · 需人工 ${stats.needs_human}`;
+    ? `证据核验模式：对照 ${evidence.facts.length} 条证据事实。可能冲突 ${stats.contradicted} · 找到证据 ${stats.supported} · 需人工 ${stats.needs_human}`
+    : `认知审计模式（无证据）：不计算覆盖率，只标注句子类型。意见 ${stats.opinion} · 评估 ${stats.assessment} · 未证实事实 ${stats.unverified} · 需人工 ${stats.needs_human}`;
 
   return {
     claims: results,
-    score,
+    // `coverage` is the real name; `score` stays as an alias so existing
+    // embeds and the CLI keep working. Both are null without evidence.
+    coverage,
+    score: coverage,
+    reviewQueue: buildReviewQueue(results),
     stats,
     riskFlags,
     hasEvidence,
     factCount: evidence.facts.length,
     mode,
     summary,
-    version: '1.4.0',
-    disclaimer: 'Offline heuristic auditor — high precision on explicit evidence conflicts; not a guarantee of absolute truth.',
+    version: '2.0.0',
+    metric: 'evidence-coverage',
+    disclaimer: hasEvidence
+      ? 'Coverage measures evidence match, not truth. Offline heuristics: high precision on explicit conflicts, no guarantee of correctness.'
+      : 'No evidence supplied, so no coverage is computed. Claims are labelled by type only — not by whether they are true.',
   };
 }
 
+/**
+ * CT-2: the exported report quotes the evidence each claim matched, so the
+ * reader can check the reasoning without opening the tool. A report that only
+ * says "❌ contradicted" is an accusation; one that shows the passage is a
+ * citation.
+ */
 export function generateMarkdownReport(results) {
-  const { claims, score, stats, riskFlags, hasEvidence, mode, summary, disclaimer } = results;
+  const { claims, stats, riskFlags, hasEvidence, mode, summary, disclaimer, reviewQueue } = results;
+  const coverage = results.coverage ?? results.score;
   const badge = {
-    supported: '✅ supported', opinion: '💭 opinion', assessment: '🧭 assessment',
-    needs_human: '🔍 needs human', unverified: '⬜ unverified', unsupported: '⚠️ unsupported',
-    contradicted: '❌ contradicted',
+    supported: '✅ evidence found', opinion: '💭 opinion', assessment: '🧭 assessment',
+    needs_human: '🔍 verify manually', unverified: '⚠️ no evidence', unsupported: '⚠️ no evidence',
+    contradicted: '❌ possible conflict',
   };
-  let md = `# ClaimTape Report\n\n**Score:** ${score}/100  \n**Mode:** ${mode}  \n**Evidence:** ${hasEvidence ? 'yes' : 'no'}  \n**Engine:** v1.4\n\n> ${summary}\n\n> ${disclaimer}\n\n`;
+
+  let md = `# ClaimTape Report\n\n`;
+  md += coverage == null
+    ? `**Evidence Coverage:** n/a — no evidence supplied  \n`
+    : `**Evidence Coverage:** ${coverage}/100  \n`;
+  md += `**Mode:** ${mode}  \n**Evidence:** ${hasEvidence ? 'yes' : 'no'}  \n**Engine:** v2.0\n\n`;
+  md += `> ${summary}\n\n`;
+  md += `> ⚠️ ${disclaimer}\n\n`;
+
+  if (hasEvidence && reviewQueue?.length) {
+    md += `## Check these first\n\n`;
+    reviewQueue.slice(0, 5).forEach((c, i) => {
+      md += `${i + 1}. ${badge[c.status] || c.status} — #${c.id}: ${c.claim.slice(0, 120)}\n`;
+    });
+    md += '\n';
+  }
+
   md += `| Status | n |\n|---|---|\n`;
   for (const [k, v] of Object.entries(stats)) md += `| ${k} | ${v} |\n`;
   md += '\n';
   if (riskFlags?.length) md += `## Risks\n${riskFlags.map(f => `- \`${f}\``).join('\n')}\n\n`;
+
   md += `## Claims\n\n`;
   for (const c of claims) {
-    md += `### ${badge[c.status] || c.status} · #${c.id}\n\n> ${c.claim}\n\n`;
+    md += `### ${hasEvidence ? (badge[c.status] || c.status) : '⚪ not checked'} · #${c.id}\n\n> ${c.claim}\n\n`;
     if (c.kind) md += `**Kind:** ${c.kind}  \n`;
+    if (c.conflictKind) md += `**Conflict:** ${c.conflictKind} mismatch  \n`;
     if (c.reasons?.length) md += `**Why:** ${c.reasons.join('; ')}  \n`;
     if (c.evidenceSnippets?.length) {
-      md += `\n**Snippets:**\n`;
-      for (const s of c.evidenceSnippets) md += `- L${s.line}: \`${s.snippet.replace(/`/g, "'")}\`\n`;
+      md += `\n**Evidence quoted:**\n`;
+      for (const s of c.evidenceSnippets) md += `> ${s.snippet.replace(/`/g, "'")}\n>\n`;
     }
     md += '\n';
   }
-  return md + `\n---\n*ClaimTape local report*\n`;
+  return md + `\n---\n*ClaimTape v2.0 — local report. Coverage measures evidence match, not truth.*\n`;
 }
 
 export function generateJSONExport(results, answerText, evidenceText) {
   return JSON.stringify({
-    meta: { tool: 'ClaimTape', version: '1.4.0', generated: new Date().toISOString() },
+    meta: {
+      tool: 'ClaimTape',
+      version: '2.0.0',
+      metric: 'evidence-coverage',
+      generated: new Date().toISOString(),
+    },
     input: { answerLength: answerText?.length ?? 0, evidenceLength: evidenceText?.length ?? 0, hasEvidence: !!evidenceText?.trim() },
-    score: results.score,
+    coverage: results.coverage ?? results.score,
+    score: results.coverage ?? results.score, // legacy alias
     mode: results.mode,
     summary: results.summary,
     stats: results.stats,
     riskFlags: results.riskFlags,
+    reviewQueue: (results.reviewQueue || []).map(c => c.id),
     claims: results.claims,
     disclaimer: results.disclaimer,
   }, null, 2);

@@ -1,4 +1,12 @@
-import { splitIntoClaims, analyze, computeTrustScore } from '../src/analyzer.js';
+import {
+  splitIntoClaims,
+  analyze,
+  computeTrustScore,
+  computeEvidenceCoverage,
+  buildReviewQueue,
+} from '../src/analyzer.js';
+import { negationPolarity, findNumericConflicts } from '../src/polarity.js';
+import { tokenize } from '../src/tokenize.js';
 import { DEMO_ANSWER, DEMO_EVIDENCE } from '../src/demo.js';
 
 let passed = 0, failed = 0;
@@ -53,18 +61,50 @@ const costClaim = fam.claims[0];
 assert(costClaim.status === 'contradicted', `80% vs 0.62 cost contradicted got ${costClaim.status}`);
 assert(!/coverage=78\.4/.test(costClaim.reasons.join(' ')) || costClaim.status === 'contradicted', 'no false coverage support');
 
-console.log('\n── advice without evidence not zero ──');
+console.log('\n── CT-1: no evidence ⇒ NO score at all ──');
 const advice = analyze('建议先做数字版私人助理。可以把系统拆成思考、情绪、物理、反应四层。目前还没有系统同时达到四个顶级。', '');
 assert(advice.mode === 'epistemic-audit', 'epistemic');
-assert(advice.score >= 40, `advice score ${advice.score}`);
+// Coverage against zero evidence is undefined, not zero. Rendering "0/100"
+// there reads as an accusation against text nobody ever offered proof for.
+assert(advice.score === null, `no-evidence score must be null, got ${advice.score}`);
+assert(advice.coverage === null, 'coverage null without evidence');
 assert(advice.stats.contradicted === 0, 'no contra without evidence');
+assert(advice.claims.every(c => c.status !== 'contradicted'), 'nothing contradicted without evidence');
 
 console.log('\n── helpers ──');
-assert(computeTrustScore([{ status: 'supported', isRisky: false }], { hasEvidence: true }) >= 80, 'supported high');
-assert(computeTrustScore([
-  { status: 'opinion', isRisky: false },
-  { status: 'assessment', isRisky: false },
-], { hasEvidence: false }) >= 45, 'opinions not zero');
+assert(computeEvidenceCoverage([{ status: 'supported', isRisky: false }], { hasEvidence: true }) >= 80, 'supported high');
+assert(computeEvidenceCoverage([{ status: 'opinion', isRisky: false }], { hasEvidence: false }) === null, 'no coverage without evidence');
+assert(computeTrustScore === computeEvidenceCoverage, 'legacy alias kept for embeds');
+
+console.log('\n── CT-3: negation polarity ──');
+assert(negationPolarity('tests do not pass') === -1, 'EN negation');
+assert(negationPolarity('all tests pass') === 1, 'EN positive');
+assert(negationPolarity('测试没有通过') === -1, 'ZH negation');
+assert(negationPolarity('测试全部通过') === 1, 'ZH positive');
+assert(negationPolarity('not only fast but also cheap') === 1, 'not-only is not a negation');
+
+console.log('\n── CT-3: numeric contradiction ──');
+const numEn = findNumericConflicts('coverage 95%', 'coverage: 62%');
+assert(numEn.length === 1, `EN 95 vs 62 conflict, got ${numEn.length}`);
+const numZh = findNumericConflicts('覆盖率 95%', '覆盖率：62%');
+assert(numZh.length === 1, `ZH 覆盖率 conflict, got ${numZh.length}`);
+assert(findNumericConflicts('coverage 95%', 'coverage: 94%').length === 0, 'within tolerance is not a conflict');
+// The v1.4 false positive: a cost figure must never be compared to coverage.
+assert(findNumericConflicts('API costs reduced by 80%', 'coverage: 78.4%').length === 0, 'cross-family numbers never conflict');
+
+console.log('\n── CT-4: Chinese tokenisation ──');
+const zhTok = tokenize('系统已经上线，测试全部通过');
+assert(zhTok.length >= 3, `ZH yields word tokens, got ${JSON.stringify(zhTok)}`);
+assert(zhTok.some(t => t.length === 2), 'ZH tokens are words not whole runs');
+assert(tokenize('All tests pass').includes('tests'), 'EN still works');
+const zhCov = analyze('系统的测试覆盖率是 78.4%。', '测试覆盖率：78.4%，全部用例通过。');
+assert(zhCov.score !== null && zhCov.score > 0, `ZH claim gets non-zero coverage, got ${zhCov.score}`);
+
+console.log('\n── CT-1: review queue ordering ──');
+const q = buildReviewQueue(demo.claims);
+assert(q.length > 0, 'queue non-empty');
+assert(q[0].status === 'contradicted', `conflicts come first, got ${q[0].status}`);
+assert(!q.some(c => c.status === 'supported' && !c.isRisky), 'clean supported claims are not queued');
 
 console.log(`\n── ${passed} passed, ${failed} failed ──\n`);
 if (failed) process.exit(1);

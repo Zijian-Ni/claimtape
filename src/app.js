@@ -28,18 +28,48 @@ export function createApp(root) {
       .replace(/'/g, '&#39;');
   }
 
-  function badgeLabel(status) {
-    const en = {
-      supported: '✅ Supported', opinion: '💭 Opinion', assessment: '🧭 Assessment',
-      needs_human: '🔍 Needs human', unverified: '⬜ Unverified', unsupported: '⬜ Unverified',
-      contradicted: '❌ Contradicted',
-    };
-    const zh = {
-      supported: '✅ 有支撑', opinion: '💭 意见建议', assessment: '🧭 评估判断',
-      needs_human: '🔍 需人工', unverified: '⬜ 未证实', unsupported: '⬜ 未证实',
-      contradicted: '❌ 与证据矛盾',
-    };
-    return (lang === 'zh' ? zh : en)[status] || status;
+  // CT-1: badge wording comes from i18n so the four states stay honest.
+  // "Supported" became "Evidence found" and "Contradicted" became "Possible
+  // conflict" deliberately — the engine finds evidence matches, it does not
+  // adjudicate truth, and the labels must not promise more than that.
+  function badgeLabel(status, hasEvidence = true) {
+    if (!hasEvidence) return t(lang, 'badge.no_evidence');
+    return t(lang, 'badge.' + status) || status;
+  }
+
+  function badgeTip(status, hasEvidence = true) {
+    if (!hasEvidence) return t(lang, 'badgeTooltip.no_evidence');
+    const map = { unverified: 'unsupported', assessment: 'needs_human', opinion: 'needs_human' };
+    return t(lang, 'badgeTooltip.' + (map[status] || status)) || '';
+  }
+
+  /** CT-2: render evidence with <mark> at the active claim's matched spans. */
+  function evidencePane(claim) {
+    const raw = evidenceText || '';
+    if (!raw.trim()) return '';
+    const spans = (claim?.spans || []).filter(s => s.end > s.start && s.start >= 0 && s.end <= raw.length);
+
+    if (!spans.length) {
+      return `<div class="ct-evidence-pane">
+        <h5>${esc(t(lang, 'evidencePanel'))}</h5>
+        <p class="muted sm">${esc(claim ? t(lang, 'noHighlight') : t(lang, 'evidencePanelHint'))}</p>
+        <pre class="ev-body">${esc(raw.slice(0, 4000))}</pre>
+      </div>`;
+    }
+
+    let html = '';
+    let cursor = 0;
+    for (const s of spans) {
+      html += esc(raw.slice(cursor, s.start));
+      html += `<mark>${esc(raw.slice(s.start, s.end))}</mark>`;
+      cursor = s.end;
+    }
+    html += esc(raw.slice(cursor));
+
+    return `<div class="ct-evidence-pane">
+      <h5>${esc(t(lang, 'evidencePanel'))} <span class="hit-count">${spans.length}</span></h5>
+      <pre class="ev-body" id="evBody">${html}</pre>
+    </div>`;
   }
 
   function render() {
@@ -160,7 +190,14 @@ export function createApp(root) {
   }
 
   function buildResults() {
-    const { claims, score, stats, riskFlags, hasEvidence, factCount } = results;
+    const { claims, stats, riskFlags, hasEvidence, factCount } = results;
+    const score = results.coverage ?? results.score;
+
+    // CT-1: with no evidence there is nothing to measure coverage against, so
+    // we show no number at all. Rendering "0/100" over text nobody ever
+    // offered proof for reads as an accusation rather than a measurement.
+    if (!hasEvidence) return buildNoEvidenceResults();
+
     const grade = score >= 70 ? 'high' : score >= 45 ? 'medium' : score >= 25 ? 'low' : 'verylow';
     const color = score >= 70 ? '#34d399' : score >= 45 ? '#fbbf24' : score >= 25 ? '#fb923c' : '#f87171';
     let list = claims;
@@ -181,27 +218,31 @@ export function createApp(root) {
             <div class="score-num" id="scoreNum" style="color:${color}">0</div>
           </div>
           <div class="score-meta">
-            <div class="label">${t(lang, 'trustScore')}</div>
-            <div class="grade" style="color:${color}">${t(lang, 'scoreLabel.' + grade)}</div>
-            <div class="desc">${t(lang, 'trustScoreDesc')}</div>
+            <div class="label">${t(lang, 'coverageScore')}</div>
+            <div class="grade" style="color:${color}">${t(lang, 'coverageLabel.' + grade)}</div>
+            <div class="desc">${t(lang, 'coverageScoreDesc')}</div>
             <div class="mini-stats">
               <span>${stats.total} claims</span>
-              <span>${hasEvidence ? `${factCount || 0} evidence facts` : 'no evidence'}</span>
+              <span>${factCount || 0} evidence facts</span>
             </div>
           </div>
         </div>
 
+        <!-- CT-1: permanent, non-collapsible. This is the whole point. -->
+        <p class="ct-disclaimer">${esc(t(lang, 'disclaimer'))}</p>
+
         <div class="mode-banner">${esc(results.summary || '')}</div>
         <div class="stat-row dense">
-          ${stat(stats.supported, lang==='en'?'Supported':'有支撑', '#34d399', 'supported')}
+          ${stat(stats.supported, t(lang, 'supported'), '#34d399', 'supported')}
           ${stat((stats.opinion||0)+(stats.assessment||0), lang==='en'?'Opinion/Assess':'意见/评估', '#38bdf8', 'opinion')}
-          ${stat(stats.needs_human, lang==='en'?'Needs human':'需人工', '#a78bfa', 'needs_human')}
-          ${stat(stats.unverified||stats.unsupported||0, lang==='en'?'Unverified':'未证实', '#fbbf24', 'unverified')}
-          ${stat(stats.contradicted, lang==='en'?'Contradicted':'矛盾', '#f87171', 'contradicted')}
+          ${stat(stats.needs_human, t(lang, 'needsHuman'), '#a78bfa', 'needs_human')}
+          ${stat(stats.unverified||stats.unsupported||0, t(lang, 'unsupported'), '#fbbf24', 'unverified')}
+          ${stat(stats.contradicted, t(lang, 'contradicted'), '#f87171', 'contradicted')}
         </div>
-        <p class="disclaimer">${esc(results.disclaimer || '')}</p>
 
-        ${!hasEvidence ? `<div class="banner warn">${t(lang, 'noEvidence')}</div>` : `<div class="banner ok">${t(lang, 'evidenceNote')}</div>`}
+        ${reviewQueueBlock()}
+
+        <div class="banner ok">${t(lang, 'evidenceNote')}</div>
 
         ${riskFlags.length ? `
           <div class="risk-box">
@@ -218,8 +259,61 @@ export function createApp(root) {
           </div>
         </div>
 
+        <!-- CT-2: two columns — claims on the left, the evidence they matched
+             on the right, highlighted at the exact character offsets. -->
+        <div class="ct-split">
+          <div class="claim-list">
+            ${list.map((c, i) => claimCard(c, i)).join('') || `<p class="muted">No claims in this filter.</p>`}
+          </div>
+          ${evidencePane(claims.find(c => c.id === activeClaim))}
+        </div>
+
+        <div class="export-row">
+          <button class="ghost" id="copyMd">📄 ${t(lang, 'copyMarkdown')}</button>
+          <button class="ghost" id="dlJson">⬇ ${t(lang, 'exportJSON')}</button>
+        </div>
+      </div>`;
+  }
+
+  /** CT-1: the review queue IS the product — the score is only a summary. */
+  function reviewQueueBlock() {
+    const q = results?.reviewQueue || [];
+    if (!q.length) return '';
+    return `
+      <div class="ct-queue">
+        <h4>🔎 ${esc(t(lang, 'reviewQueue'))} <small>${esc(t(lang, 'reviewQueueDesc'))}</small></h4>
+        <ol>
+          ${q.slice(0, 5).map(c => `
+            <li><button class="queue-item" data-goto="${c.id}">
+              <span class="q-badge">${esc(badgeLabel(c.status))}</span>
+              <span class="q-text">${esc(c.claim.slice(0, 110))}${c.claim.length > 110 ? '…' : ''}</span>
+            </button></li>`).join('')}
+        </ol>
+      </div>`;
+  }
+
+  /** CT-1: the no-evidence path — type labels only, and explicitly no score. */
+  function buildNoEvidenceResults() {
+    const { claims, stats } = results;
+    return `
+      <div class="results-anim">
+        <div class="ct-noev">
+          <div class="ct-noev-icon">⚪</div>
+          <h3>${esc(t(lang, 'noEvidenceTitle'))}</h3>
+          <p>${esc(t(lang, 'noEvidenceBody'))}</p>
+          <button class="primary" id="addEvidenceBtn">➕ ${esc(t(lang, 'noEvidenceCta'))}</button>
+        </div>
+
+        <div class="stat-row dense">
+          ${stat(stats.total, t(lang, 'totalClaims'), '#38bdf8', 'all')}
+          ${stat((stats.opinion||0)+(stats.assessment||0), lang==='en'?'Opinion/Assess':'意见/评估', '#a78bfa', 'opinion')}
+          ${stat(stats.unverified||0, lang==='en'?'Factual, unchecked':'事实型未核', '#fbbf24', 'unverified')}
+        </div>
+
+        <p class="ct-disclaimer">${esc(results.disclaimer || '')}</p>
+
         <div class="claim-list">
-          ${list.map((c, i) => claimCard(c, i)).join('') || `<p class="muted">No claims in this filter.</p>`}
+          ${claims.map((c, i) => claimCard(c, i, false)).join('')}
         </div>
 
         <div class="export-row">
@@ -235,15 +329,20 @@ export function createApp(root) {
     </button>`;
   }
 
-  function claimCard(c, i) {
+  function claimCard(c, i, hasEvidence = true) {
     const colors = { supported: '#34d399', opinion: '#38bdf8', assessment: '#22d3ee', unsupported: '#fbbf24', unverified: '#fbbf24', contradicted: '#f87171', needs_human: '#a78bfa' };
-    const col = colors[c.status] || '#94a3b8';
+    const col = hasEvidence ? (colors[c.status] || '#94a3b8') : '#94a3b8';
     const open = activeClaim === c.id;
+    const conflictTag = c.conflictKind
+      ? `<span class="conflict-tag">${esc(t(lang, 'conflictReason.' + c.conflictKind))}</span>`
+      : '';
     return `
     <article class="claim ${open ? 'open' : ''}" data-id="${c.id}" style="--c:${col}; --d:${i * 40}ms">
       <header>
         <span class="idx">#${c.id}</span>
-        <span class="badge" style="color:${col};border-color:${col}55;background:${col}18">${esc(badgeLabel(c.status))}</span>
+        <span class="badge" style="color:${col};border-color:${col}55;background:${col}18"
+              title="${esc(badgeTip(c.status, hasEvidence))}">${esc(badgeLabel(c.status, hasEvidence))}</span>
+        ${conflictTag}
         ${c.isRisky ? '<span class="risk-tag">🚩</span>' : ''}
         <span class="chev">${open ? '▾' : '▸'}</span>
       </header>
@@ -302,6 +401,7 @@ export function createApp(root) {
           panel.innerHTML = buildResults();
           bindResultsOnly();
           burst(card);
+          scrollToHighlight();
         }
       });
     });
@@ -322,8 +422,25 @@ export function createApp(root) {
         const id = Number(card.dataset.id);
         activeClaim = activeClaim === id ? null : id;
         const panel = root.querySelector('#resultPanel');
-        if (panel && results) { panel.innerHTML = buildResults(); bindResultsOnly(); animateScore(false); }
+        if (panel && results) { panel.innerHTML = buildResults(); bindResultsOnly(); animateScore(false); scrollToHighlight(); }
       });
+    });
+    // CT-1: review-queue entries jump straight to the claim they name.
+    root.querySelectorAll('[data-goto]').forEach(b => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      activeClaim = Number(b.dataset.goto);
+      const panel = root.querySelector('#resultPanel');
+      if (panel && results) {
+        panel.innerHTML = buildResults();
+        bindResultsOnly();
+        animateScore(false);
+        root.querySelector(`.claim[data-id="${activeClaim}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        scrollToHighlight();
+      }
+    }));
+    root.querySelector('#addEvidenceBtn')?.addEventListener('click', () => {
+      root.querySelector('#evidence')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      root.querySelector('#evidence')?.focus();
     });
     root.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -375,7 +492,10 @@ export function createApp(root) {
 
   function animateScore(anim = true) {
     if (!results) return;
-    const target = results.score;
+    // CT-1: no evidence means no coverage number and therefore no gauge to
+    // animate. The no-evidence view does not render these nodes at all.
+    const target = results.coverage ?? results.score;
+    if (target == null) return;
     const num = root.querySelector('#scoreNum');
     const arc = root.querySelector('#scoreArc');
     const C = 2 * Math.PI * 52;
@@ -396,6 +516,18 @@ export function createApp(root) {
       if (p < 1) requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
+  }
+
+  /**
+   * CT-2: bring the first highlighted evidence span into view. Without this the
+   * highlight can land off-screen in a long log and the whole interaction feels
+   * broken even though it worked.
+   */
+  function scrollToHighlight() {
+    requestAnimationFrame(() => {
+      const mark = root.querySelector('#evBody mark');
+      if (mark) mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
   }
 
   function toast(msg) {
