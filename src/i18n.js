@@ -8,7 +8,7 @@ export const i18n = {
     inputLabel: 'AI Answer',
     inputPlaceholder: 'Paste the AI-generated text here…',
     evidenceLabel: 'Evidence (optional)',
-    evidencePlaceholder: 'Paste trace logs, test output, file list, or any supporting text here…\n\nSupports: plain text, JSONL, Markdown',
+    evidencePlaceholder: '可选：粘贴日志 / JSONL / 测试输出 / 文件列表…',
     uploadBtn: 'Upload file (.jsonl / .md / .txt)',
     analyzeBtn: 'Analyze',
     demoBtn: 'Try Demo',
@@ -32,6 +32,9 @@ export const i18n = {
     evidenceNote: 'Evidence provided — analyzing keyword coverage…',
     badge: {
       supported: '✅ Supported',
+      opinion: '💭 Opinion',
+      assessment: '🧭 Assessment',
+      unverified: '⬜ Unverified',
       unsupported: '⚠️ Unsupported',
       contradicted: '❌ Contradicted',
       needs_human: '🔍 Needs Human',
@@ -101,6 +104,9 @@ export const i18n = {
     evidenceNote: '已提供证据 — 正在分析关键词覆盖…',
     badge: {
       supported: '✅ 有支撑',
+      opinion: '💭 意见建议',
+      assessment: '🧭 评估判断',
+      unverified: '⬜ 未证实',
       unsupported: '⚠️ 无支撑',
       contradicted: '❌ 与证据矛盾',
       needs_human: '🔍 需人工核实',

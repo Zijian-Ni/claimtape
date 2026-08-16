@@ -28,6 +28,20 @@ export function createApp(root) {
       .replace(/'/g, '&#39;');
   }
 
+  function badgeLabel(status) {
+    const en = {
+      supported: '✅ Supported', opinion: '💭 Opinion', assessment: '🧭 Assessment',
+      needs_human: '🔍 Needs human', unverified: '⬜ Unverified', unsupported: '⬜ Unverified',
+      contradicted: '❌ Contradicted',
+    };
+    const zh = {
+      supported: '✅ 有支撑', opinion: '💭 意见建议', assessment: '🧭 评估判断',
+      needs_human: '🔍 需人工', unverified: '⬜ 未证实', unsupported: '⬜ 未证实',
+      contradicted: '❌ 与证据矛盾',
+    };
+    return (lang === 'zh' ? zh : en)[status] || status;
+  }
+
   function render() {
     root.innerHTML = '';
     root.appendChild(buildShell());
@@ -50,7 +64,7 @@ export function createApp(root) {
       <span class="ct-mark">📋</span>
       <div>
         <strong>ClaimTape</strong>
-        <small>evidence-first · v1.2</small>
+        <small>evidence-first · v1.3</small>
       </div>
     </div>
     <div class="ct-nav-actions">
@@ -81,12 +95,12 @@ export function createApp(root) {
 
       <label class="field">
         <span>🤖 ${t(lang, 'inputLabel')}</span>
-        <textarea id="answer" rows="9" placeholder="${esc(t(lang, 'inputPlaceholder'))}">${esc(answerText)}</textarea>
+        <textarea id="answer" rows="9" >${esc(answerText)}</textarea>
       </label>
 
       <label class="field">
         <span>🔍 ${t(lang, 'evidenceLabel')} <em>${lang === 'en' ? 'optional but recommended' : '可选但强烈建议'}</em></span>
-        <textarea id="evidence" rows="8" placeholder="${esc(t(lang, 'evidencePlaceholder'))}">${esc(evidenceText)}</textarea>
+        <textarea id="evidence" rows="8" >${esc(evidenceText)}</textarea>
       </label>
 
       <div class="toolbar">
@@ -149,7 +163,10 @@ export function createApp(root) {
     const { claims, score, stats, riskFlags, hasEvidence, factCount } = results;
     const grade = score >= 70 ? 'high' : score >= 45 ? 'medium' : score >= 25 ? 'low' : 'verylow';
     const color = score >= 70 ? '#34d399' : score >= 45 ? '#fbbf24' : score >= 25 ? '#fb923c' : '#f87171';
-    const list = filter === 'all' ? claims : claims.filter(c => c.status === filter);
+    let list = claims;
+    if (filter === 'opinion') list = claims.filter(c => c.status === 'opinion' || c.status === 'assessment');
+    else if (filter === 'unverified') list = claims.filter(c => c.status === 'unverified' || c.status === 'unsupported');
+    else if (filter !== 'all') list = claims.filter(c => c.status === filter);
 
     return `
       <div class="results-anim">
@@ -174,12 +191,15 @@ export function createApp(root) {
           </div>
         </div>
 
-        <div class="stat-row">
-          ${stat(stats.supported, t(lang, 'supported'), '#34d399', 'supported')}
-          ${stat(stats.needs_human, t(lang, 'needsHuman'), '#a78bfa', 'needs_human')}
-          ${stat(stats.unsupported, t(lang, 'unsupported'), '#fbbf24', 'unsupported')}
-          ${stat(stats.contradicted, t(lang, 'contradicted'), '#f87171', 'contradicted')}
+        <div class="mode-banner">${esc(results.summary || '')}</div>
+        <div class="stat-row dense">
+          ${stat(stats.supported, lang==='en'?'Supported':'有支撑', '#34d399', 'supported')}
+          ${stat((stats.opinion||0)+(stats.assessment||0), lang==='en'?'Opinion/Assess':'意见/评估', '#38bdf8', 'opinion')}
+          ${stat(stats.needs_human, lang==='en'?'Needs human':'需人工', '#a78bfa', 'needs_human')}
+          ${stat(stats.unverified||stats.unsupported||0, lang==='en'?'Unverified':'未证实', '#fbbf24', 'unverified')}
+          ${stat(stats.contradicted, lang==='en'?'Contradicted':'矛盾', '#f87171', 'contradicted')}
         </div>
+        <p class="disclaimer">${esc(results.disclaimer || '')}</p>
 
         ${!hasEvidence ? `<div class="banner warn">${t(lang, 'noEvidence')}</div>` : `<div class="banner ok">${t(lang, 'evidenceNote')}</div>`}
 
@@ -192,7 +212,7 @@ export function createApp(root) {
         <div class="claims-head">
           <h3>📋 ${t(lang, 'claimsTitle')}</h3>
           <div class="filters">
-            ${['all','supported','needs_human','unsupported','contradicted'].map(f =>
+            ${['all','supported','opinion','assessment','needs_human','unverified','contradicted'].map(f =>
               `<button class="chip ${filter === f ? 'on' : ''}" data-f="${f}">${f === 'all' ? (lang==='en'?'All':'全部') : f}</button>`
             ).join('')}
           </div>
@@ -216,18 +236,19 @@ export function createApp(root) {
   }
 
   function claimCard(c, i) {
-    const colors = { supported: '#34d399', unsupported: '#fbbf24', contradicted: '#f87171', needs_human: '#a78bfa' };
+    const colors = { supported: '#34d399', opinion: '#38bdf8', assessment: '#22d3ee', unsupported: '#fbbf24', unverified: '#fbbf24', contradicted: '#f87171', needs_human: '#a78bfa' };
     const col = colors[c.status] || '#94a3b8';
     const open = activeClaim === c.id;
     return `
     <article class="claim ${open ? 'open' : ''}" data-id="${c.id}" style="--c:${col}; --d:${i * 40}ms">
       <header>
         <span class="idx">#${c.id}</span>
-        <span class="badge" style="color:${col};border-color:${col}55;background:${col}18">${esc(t(lang, 'badge.' + c.status))}</span>
+        <span class="badge" style="color:${col};border-color:${col}55;background:${col}18">${esc(badgeLabel(c.status))}</span>
         ${c.isRisky ? '<span class="risk-tag">🚩</span>' : ''}
         <span class="chev">${open ? '▾' : '▸'}</span>
       </header>
       <p class="claim-text">${esc(c.claim)}</p>
+      <div class="claim-tags"><span class="kind">${esc(c.kind || '')}</span>${c.confidence!=null?`<span class="conf">${Math.round(c.confidence*100)}%</span>`:''}</div>
       ${open ? `
         <div class="claim-body">
           ${c.reasons?.length ? `<div class="why"><h5>${lang==='en'?'Why':'判定理由'}</h5>${c.reasons.map(r => `<div>${esc(r)}</div>`).join('')}</div>` : ''}
@@ -240,14 +261,19 @@ export function createApp(root) {
   }
 
   function bind() {
+    const aEl = root.querySelector('#answer');
+    const eEl = root.querySelector('#evidence');
+    if (aEl) { aEl.placeholder = t(lang, 'inputPlaceholder') || 'Paste AI answer…'; aEl.value = answerText; }
+    if (eEl) { eEl.placeholder = t(lang, 'evidencePlaceholder') || 'Optional evidence…'; eEl.value = evidenceText; }
+
     root.querySelector('#langBtn')?.addEventListener('click', () => {
       sync(); lang = lang === 'en' ? 'zh' : 'en'; localStorage.setItem('ct_lang', lang); render();
     });
-    root.querySelector('#answer')?.addEventListener('input', e => answerText = e.target.value);
-    root.querySelector('#evidence')?.addEventListener('input', e => evidenceText = e.target.value);
-    root.querySelector('#analyzeBtn')?.addEventListener('click', run);
-    root.querySelector('#demoBtn')?.addEventListener('click', () => { answerText = DEMO_ANSWER; evidenceText = DEMO_EVIDENCE; run(true); });
-    root.querySelector('#emptyDemo')?.addEventListener('click', () => { answerText = DEMO_ANSWER; evidenceText = DEMO_EVIDENCE; run(true); });
+    aEl?.addEventListener('input', e => answerText = e.target.value);
+    eEl?.addEventListener('input', e => evidenceText = e.target.value);
+    root.querySelector('#analyzeBtn')?.addEventListener('click', () => run());
+    root.querySelector('#demoBtn')?.addEventListener('click', () => run({ skipSync: true, answer: DEMO_ANSWER, evidence: DEMO_EVIDENCE }));
+    root.querySelector('#emptyDemo')?.addEventListener('click', () => run({ skipSync: true, answer: DEMO_ANSWER, evidence: DEMO_EVIDENCE }));
     root.querySelector('#clearBtn')?.addEventListener('click', () => { answerText=''; evidenceText=''; results=null; filter='all'; activeClaim=null; render(); });
     root.querySelector('#file')?.addEventListener('change', async e => {
       const f = e.target.files?.[0]; if (!f) return;
@@ -319,22 +345,32 @@ export function createApp(root) {
     evidenceText = root.querySelector('#evidence')?.value ?? evidenceText;
   }
 
-  function run() {
-    sync();
-    if (!answerText.trim()) {
+  function run(opts = {}) {
+    // CRITICAL: demo/preset must not sync from empty DOM
+    if (!opts.skipSync) sync();
+    if (opts.answer != null) answerText = opts.answer;
+    if (opts.evidence != null) evidenceText = opts.evidence;
+    if (!String(answerText || '').trim()) {
       root.querySelector('#answer')?.classList.add('shake');
       setTimeout(() => root.querySelector('#answer')?.classList.remove('shake'), 500);
+      toast(lang === 'en' ? 'Paste an AI answer first' : '请先粘贴 AI 回答');
       return;
     }
     busy = true; render();
-    // staged UX: short delay + particle burst
     setTimeout(() => {
-      results = analyze(answerText, evidenceText);
+      try {
+        results = analyze(answerText, evidenceText);
+      } catch (err) {
+        busy = false; render();
+        toast('Analyze failed: ' + err.message);
+        console.error(err);
+        return;
+      }
       busy = false; filter = 'all'; activeClaim = results.claims[0]?.id ?? null;
       render();
       spawnBurst();
       root.querySelector('#resultPanel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 380);
+    }, 220);
   }
 
   function animateScore(anim = true) {
