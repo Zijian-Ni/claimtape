@@ -94,7 +94,7 @@ export function createApp(root) {
       <span class="ct-mark">📋</span>
       <div>
         <strong>ClaimTape</strong>
-        <small>evidence-first · v1.4</small>
+        <small>evidence-first · v2.0</small>
       </div>
     </div>
     <div class="ct-nav-actions">

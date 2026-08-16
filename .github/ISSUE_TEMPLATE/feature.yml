@@ -1,0 +1,42 @@
+name: Feature request
+description: Suggest a detector, language, or capability
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before suggesting: ClaimTape deliberately **does not** try to determine
+        truth. It measures whether a claim can be located in the supplied
+        evidence. Proposals that turn it into a fact-checker will be declined —
+        not because they are bad ideas, but because they are a different tool.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of request is this?
+      options:
+        - New conflict detector
+        - Support for another language
+        - CLI / CI integration
+        - Export or reporting
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What did ClaimTape let you down on?
+      description: A concrete case you hit, not a hypothetical.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Example claim + evidence
+      render: text
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints acknowledged
+      options:
+        - label: This can work fully offline, with no API key and no backend
+        - label: This does not require ClaimTape to judge whether a claim is true

@@ -1,0 +1,51 @@
+name: Bug report
+description: A claim was judged wrongly, or the UI misbehaved
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **A wrong verdict is the most valuable bug report here.** If ClaimTape
+        flagged something innocent, or waved through something it should have
+        caught, that is exactly what we want to see.
+
+        Please redact anything private before pasting — everything you paste
+        here is public.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What went wrong?
+      options:
+        - False positive (flagged something that was fine)
+        - False negative (missed a real conflict)
+        - Wrong evidence highlighted
+        - Chinese / non-English text handled badly
+        - UI or export problem
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: claim
+    attributes:
+      label: The AI answer text
+      description: The smallest snippet that reproduces it.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: The evidence you supplied
+      render: text
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected vs what you got
+      placeholder: "Expected ⚠️ No evidence, got ✅ Evidence found"
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Where did this happen?
+      placeholder: "live site / local dev / CLI, browser + version"
