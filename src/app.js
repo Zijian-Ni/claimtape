@@ -20,11 +20,41 @@ export function createApp(rootEl) {
   function buildHTML() {
     return `
 <div class="ct-app" data-lang="${lang}">
+  <div class="ct-aurora-bg" aria-hidden="true">
+    <div class="ct-band ct-band-1"></div>
+    <div class="ct-band ct-band-2"></div>
+    <div class="ct-band ct-band-3"></div>
+    <div class="ct-grid"></div>
+    <div class="ct-custom-bg" id="customBgLayer"></div>
+  </div>
   ${buildHeader()}
   ${buildHero()}
   ${buildInputPanel()}
   ${buildResultsPanel()}
   ${buildFooter()}
+  ${buildThemeDock()}
+</div>`;
+  }
+
+  function buildThemeDock() {
+    return `
+<div class="ct-theme-dock" id="themeDock">
+  <button class="ct-theme-toggle" id="themeToggle" title="Background / 背景">🎨</button>
+  <div class="ct-theme-panel" id="themePanel" hidden>
+    <div class="ct-theme-title">${lang === 'en' ? 'Background' : '背景'}</div>
+    <div class="ct-theme-presets">
+      <button data-bg="aurora" class="ct-preset active">Aurora</button>
+      <button data-bg="midnight" class="ct-preset">Midnight</button>
+      <button data-bg="nebula" class="ct-preset">Nebula</button>
+      <button data-bg="ember" class="ct-preset">Ember</button>
+    </div>
+    <label class="ct-theme-upload">
+      ${lang === 'en' ? 'Custom image / GIF' : '自定义图片 / 动图'}
+      <input type="file" id="bgUpload" accept="image/*,.gif" hidden />
+    </label>
+    <input type="range" id="bgOpacity" min="10" max="90" value="35" />
+    <button class="ct-btn ct-btn--ghost" id="bgClear">${lang === 'en' ? 'Clear custom' : '清除自定义'}</button>
+  </div>
 </div>`;
   }
 
@@ -35,7 +65,7 @@ export function createApp(rootEl) {
     <div class="ct-logo">
       <span class="ct-logo-icon">📋</span>
       <span class="ct-logo-text">ClaimTape</span>
-      <span class="ct-logo-badge">v1.0</span>
+      <span class="ct-logo-badge">v1.1</span>
     </div>
     <div class="ct-header-actions">
       <button class="ct-lang-toggle" id="langToggle" title="Switch language / 切换语言">
@@ -268,6 +298,11 @@ export function createApp(rootEl) {
       ${claim.conflictSignals.map(s => `<span class="ct-chip ct-chip--conflict">${escapeHtml(s)}</span>`).join('')}
     </div>
   </div>` : ''}
+  ${claim.reasons?.length ? `
+  <div class="ct-claim-meta">
+    <span class="ct-meta-label">${lang === 'en' ? 'Why' : '判定理由'}</span>
+    <div class="ct-reason-list">${claim.reasons.map(r => `<span class="ct-reason">${escapeHtml(r)}</span>`).join('')}</div>
+  </div>` : ''}
 </div>`;
   }
 
@@ -364,6 +399,81 @@ export function createApp(rootEl) {
       URL.revokeObjectURL(url);
       flashBtn('exportJSONBtn', t(lang, 'downloaded'));
     });
+
+    bindThemeDock();
+  }
+
+  function bindThemeDock() {
+    const dock = document.getElementById('themeDock');
+    const panel = document.getElementById('themePanel');
+    const toggle = document.getElementById('themeToggle');
+    if (!dock || !panel || !toggle) return;
+
+    // restore
+    applySavedBg();
+
+    toggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      panel.hidden = !panel.hidden;
+    });
+
+    panel.querySelectorAll('.ct-preset').forEach(btn => {
+      btn.addEventListener('click', () => {
+        panel.querySelectorAll('.ct-preset').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        localStorage.setItem('ct_bg_preset', btn.dataset.bg);
+        document.documentElement.dataset.bg = btn.dataset.bg;
+      });
+    });
+
+    document.getElementById('bgUpload')?.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        try { localStorage.setItem('ct_bg_custom', dataUrl); } catch { /* quota */ }
+        applyCustomBg(dataUrl);
+      };
+      reader.readAsDataURL(file);
+    });
+
+    document.getElementById('bgOpacity')?.addEventListener('input', (e) => {
+      const v = e.target.value;
+      localStorage.setItem('ct_bg_opacity', v);
+      document.documentElement.style.setProperty('--ct-custom-opacity', String(Number(v) / 100));
+    });
+
+    document.getElementById('bgClear')?.addEventListener('click', () => {
+      localStorage.removeItem('ct_bg_custom');
+      applyCustomBg(null);
+    });
+  }
+
+  function applySavedBg() {
+    const preset = localStorage.getItem('ct_bg_preset') || 'aurora';
+    document.documentElement.dataset.bg = preset;
+    document.querySelectorAll('.ct-preset').forEach(b => {
+      b.classList.toggle('active', b.dataset.bg === preset);
+    });
+    const op = localStorage.getItem('ct_bg_opacity') || '35';
+    document.documentElement.style.setProperty('--ct-custom-opacity', String(Number(op) / 100));
+    const opEl = document.getElementById('bgOpacity');
+    if (opEl) opEl.value = op;
+    const custom = localStorage.getItem('ct_bg_custom');
+    if (custom) applyCustomBg(custom);
+  }
+
+  function applyCustomBg(dataUrl) {
+    const layer = document.getElementById('customBgLayer');
+    if (!layer) return;
+    if (dataUrl) {
+      layer.style.backgroundImage = `url(${dataUrl})`;
+      layer.classList.add('show');
+    } else {
+      layer.style.backgroundImage = '';
+      layer.classList.remove('show');
+    }
   }
 
   function syncInputs() {

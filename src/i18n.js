@@ -48,6 +48,7 @@ export const i18n = {
       already_deployed: 'Claims something is already deployed/done',
       no_issues: 'Claims no issues/errors found',
       will_work: 'Overly confident "will work" / "guaranteed"',
+      absolute_all: 'Absolute language: every/all/any/fully done',
     },
     scoreLabel: {
       high: 'High Trust',
@@ -116,6 +117,7 @@ export const i18n = {
       already_deployed: '声称某事已部署/已完成',
       no_issues: '声称未发现问题/错误',
       will_work: '过度自信地说"一定有效"/"保证"',
+      absolute_all: '绝对化措辞：所有/任意/完全完成',
     },
     scoreLabel: {
       high: '高可信度',
