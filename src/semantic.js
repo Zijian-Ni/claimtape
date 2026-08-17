@@ -17,6 +17,28 @@
 import { splitSentences } from './tokenize.js';
 
 export const SEMANTIC_MODEL = 'Xenova/all-MiniLM-L6-v2';
+
+/**
+ * Cosine floor for calling two sentences related.
+ *
+ * Measured against the real MiniLM in a browser (not the test double), cold
+ * load from jsDelivr ~8s, 384 dims:
+ *
+ *   paraphrases      0.42 – 0.61
+ *   loosely related  ~0.32
+ *   contradiction    ~0.32   ("runs entirely offline" vs "requires a live API key")
+ *   unrelated        ~0.00
+ *
+ * The gap to unrelated text is enormous, so false highlights are unlikely.
+ * The interesting boundary is the other one: a contradiction of a claim scores
+ * about the same as a loosely related sentence, so dropping this floor to catch
+ * more paraphrases would start highlighting sentences that *disagree* with the
+ * claim as though they supported it. 0.42 sits deliberately above that band.
+ *
+ * The cost of the current setting is recall -- some genuine paraphrases land
+ * just under it and go unhighlighted. That failure is the safe one: this layer
+ * only ever adds highlights, and never changes a coverage badge.
+ */
 export const SEMANTIC_THRESHOLD = 0.42;
 
 // jsDelivr ESM build. Vite must not try to resolve this at build time — the
