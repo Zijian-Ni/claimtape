@@ -113,6 +113,7 @@ export function createApp(root) {
     </div>
   </header>
 
+  <main class="ct-main">
   <section class="ct-hero">
     <div class="eyebrow">◈ offline AI claim auditor</div>
     <h1>${esc(t(lang, 'tagline'))}</h1>
@@ -172,6 +173,7 @@ export function createApp(root) {
       ${[1,2,3,4].map(n => `<div class="step"><i>${n}</i><span>${t(lang, 'how' + n)}</span></div>`).join('')}
     </div>
   </section>
+  </main>
 
   <div class="theme-pop" id="themePop" hidden>
     <div class="theme-title">${lang === 'en' ? 'Atmosphere' : '氛围'}</div>
