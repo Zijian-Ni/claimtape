@@ -36,5 +36,8 @@
     "esbuild@0.21.5": true
   },
   "type": "module",
-  "author": "Zijian Ni <xiaoni112233@outlook.com>"
+  "author": "Zijian Ni <xiaoni112233@outlook.com>",
+  "dependencies": {
+    "lz-string": "^1.5.0"
+  }
 }

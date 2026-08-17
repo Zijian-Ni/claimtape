@@ -64,6 +64,7 @@ Paste evidence (logs, trace.jsonl, source text) ──────────�
 ✅ / ⚠️ / ❌ / 🔍 per claim   (click → highlights the evidence)
 🚩 Risk flags                ("100% coverage", "already deployed", …)
 📋 Markdown report           (quotes the evidence it matched)
+🔗 Share link                (URL fragment; redacted; 8000-char cap)
 ```
 
 **Claim badges**
@@ -143,6 +144,8 @@ Everything runs in your browser:
 
 The one exception is the **optional** semantic-pairing toggle. It is off by default. Turning it on downloads a small embedding model into this browser's cache on first use so paraphrase matching can run offline afterwards. That download is the only network request in the Aurora Evidence Suite. Disable the toggle (or never enable it) and the page stays fully offline.
 
+**Share links** pack the report (claims, verdicts, spans, coverage — not the raw input twice) into the URL fragment with `lz-string`. Secrets are redacted first (`sk-…`, home paths, emails, tokens) and the UI shows an accurate “redacted N items” count. URLs are capped at 8000 characters; if the report does not fit, ClaimTape offers a download instead of silently truncating evidence. Opening a share link restores the report read-only, with a banner reminding you that coverage is still an evidence match, not a truth verdict.
+
 ---
 
 ## Deploy
@@ -173,6 +176,8 @@ npm run build     # → dist/, ready for GitHub Pages
 - **中文分词**：中文没有空格，旧分词器把「系统已经上线」当成一个 token，匹配不到任何东西，导致**每一条中文声明都是零覆盖率并被标记**。现在用 `Intl.Segmenter`，降级方案是字符 bigram。
 
 **可选的本地语义配对**（默认关闭）：只改善「声明高亮到哪一段证据」。它**不改徽章、不改证据覆盖率、不把数值/否定冲突改成一致**。首次开启会把一个小模型下载到本浏览器缓存——这是整套工具里唯一会访问网络的步骤。模型加载失败或离线时静默退回词面匹配。CLI 完全不加载它。
+
+**分享链接**把报告（声明、判定、高亮跨度、覆盖率——不是把原文存两遍）压进 URL fragment。编码前会脱敏（`sk-…`、家目录、邮箱、令牌），并如实显示「已脱敏 N 处」。URL 上限 8000 字符；放不下就改下载，**绝不悄悄截断证据**。打开分享链接会以只读方式还原报告，并有横幅提醒：覆盖率仍然只表示证据匹配，不是真伪判决。
 
 ---
 

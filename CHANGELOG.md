@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Optional local semantic pairing (off by default). A lazily loaded `transformers.js` MiniLM model can highlight a paraphrased evidence sentence that lexical overlap missed. Pairing only: it never changes a badge, never overrides a numeric or negation conflict, and never invents a competing score. Missing model / offline → silent lexical fallback. Not used by the CLI.
+- Shareable report links (`#ct=`): `lz-string` fragment of a slim, pre-redacted payload. Cap 8000 characters — oversized reports offer a download instead of silent truncation. Opening a link restores the report read-only.
 
 ## [2.0.0] — 2026-08-16
 

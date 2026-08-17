@@ -13,6 +13,13 @@ import {
   loadSemanticPairer,
   pairerFromEmbedder,
 } from '../src/semantic.js';
+import {
+  buildShareURL,
+  decodeShareURL,
+  encodeSharePayload,
+  reportFromShare,
+  MAX_SHARE_URL,
+} from '../src/share.js';
 
 let passed = 0, failed = 0;
 const assert = (c, m) => { if (c) { console.log('  ✅', m); passed++; } else { console.error('  ❌', m); failed++; } };
@@ -180,6 +187,57 @@ const alsoBroken = await loadSemanticPairer({
   importTransformers: async () => ({ pipeline: undefined }),
 });
 assert(alsoBroken === null, 'missing pipeline() degrades silently');
+
+console.log('\n── CT-A2: share link round-trip ──');
+const shareSrc = analyze(DEMO_ANSWER, DEMO_EVIDENCE);
+const built = buildShareURL('https://zijian-ni.github.io/claimtape/', shareSrc, DEMO_EVIDENCE);
+assert(built.ok, `demo report fits in a share URL (${built.length} chars)`);
+const decoded = decodeShareURL(built.encoded);
+assert(!!decoded, 'decode returns a payload');
+const restored = reportFromShare(decoded);
+assert(restored.claims.length === shareSrc.claims.length, 'claim count round-trips');
+assert((restored.coverage ?? restored.score) === (shareSrc.coverage ?? shareSrc.score), 'coverage round-trips');
+assert(restored.claims.every((c, i) => c.status === shareSrc.claims[i].status && c.claim === shareSrc.claims[i].claim), 'verdicts and claim text round-trip');
+assert(JSON.stringify(restored.claims.map(c => c.spans)) === JSON.stringify(shareSrc.claims.map(c => c.spans || [])), 'spans round-trip');
+assert(decoded.evidence.includes('staging'), 'evidence is kept once for highlight restore');
+assert(!JSON.stringify(decoded).includes(DEMO_ANSWER.slice(0, 40)) || decoded.claims[0].claim.includes('production'), 'raw answer is not stored twice');
+
+// Liberal decode: uncompressed JSON, JSONL claims, wrapper object, prefixed hash.
+const uncompressed = decodeShareURL(encodeURIComponent(JSON.stringify({ claims: shareSrc.claims, coverage: shareSrc.coverage, hasEvidence: true, evidence: DEMO_EVIDENCE })));
+assert(uncompressed?.claims?.length === shareSrc.claims.length, 'uncompressed JSON is accepted');
+const jsonl = shareSrc.claims.map(c => JSON.stringify({ id: c.id, claim: c.claim, status: c.status })).join('\n');
+const { default: LZString } = await import('lz-string');
+const jsonlDecoded = decodeShareURL(LZString.compressToEncodedURIComponent(jsonl));
+assert(jsonlDecoded?.claims?.length === shareSrc.claims.length, 'JSONL claims are accepted');
+const wrapped = decodeShareURL('#ct=' + LZString.compressToEncodedURIComponent(JSON.stringify({ report: { claims: shareSrc.claims, coverage: shareSrc.coverage, hasEvidence: true } })));
+assert(wrapped?.coverage === shareSrc.coverage, 'wrapper {report} is accepted');
+assert(decodeShareURL('!!!not-a-payload') === null, 'garbage decodes to null');
+
+console.log('\n── CT-A2: redaction before encode ──');
+const secretAnswer = 'Deployed with key sk-abcdefghijklmnopqrstuvwxyz012345 and emailed ada@example.com from /home/xiaoni/secret/deploy.log';
+const secretEvidence = 'token=sk-abcdefghijklmnopqrstuvwxyz012345 path=/home/xiaoni/secret/deploy.log contact=ada@example.com';
+const secretReport = analyze(secretAnswer, secretEvidence);
+const secretShare = encodeSharePayload(secretReport, secretEvidence);
+const blob = JSON.stringify(secretShare.payload);
+assert(secretShare.redacted >= 3, `redacted count is honest, got ${secretShare.redacted}`);
+assert(/\[REDACTED_API_KEY\]/.test(blob), 'sk- key becomes [REDACTED_API_KEY]');
+assert(/\[REDACTED_HOME\]/.test(blob), 'home path becomes [REDACTED_HOME]');
+assert(/\[REDACTED_EMAIL\]/.test(blob), 'email becomes [REDACTED_EMAIL]');
+assert(!blob.includes('sk-abcdefghijklmnopqrstuvwxyz012345'), 'raw API key never enters the payload');
+assert(!blob.includes('/home/xiaoni'), 'raw home path never enters the payload');
+assert(!blob.includes('ada@example.com'), 'raw email never enters the payload');
+
+console.log('\n── CT-A2: oversized report offers download, never truncates ──');
+// Repeated letters compress away; a long unique token stream does not.
+let entropy = '';
+for (let i = 0; i < 25000; i++) entropy += i.toString(36);
+const hugeEvidence = 'coverage: 62%.\n' + entropy;
+const huge = analyze('coverage 95%.', hugeEvidence);
+const hugeShare = buildShareURL('https://zijian-ni.github.io/claimtape/', huge, hugeEvidence);
+assert(hugeShare.tooLong === true, 'oversized report is refused');
+assert(hugeShare.ok === false, 'ok is false when over the cap');
+assert(hugeShare.length > MAX_SHARE_URL, `reported length ${hugeShare.length} exceeds ${MAX_SHARE_URL}`);
+assert(!hugeShare.url, 'no silently truncated URL is returned');
 
 console.log(`\n── ${passed} passed, ${failed} failed ──\n`);
 if (failed) process.exit(1);

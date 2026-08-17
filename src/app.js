@@ -2,6 +2,7 @@ import './style.css';
 import { t } from './i18n.js';
 import { analyze, generateMarkdownReport, generateJSONExport } from './analyzer.js';
 import { loadSemanticPairer, applySemanticPairing } from './semantic.js';
+import { buildShareURL, decodeShareURL, reportFromShare } from './share.js';
 import { DEMO_ANSWER, DEMO_EVIDENCE } from './demo.js';
 
 export function createApp(root) {
@@ -17,7 +18,9 @@ export function createApp(root) {
   // badges or Evidence Coverage — only which evidence passage is highlighted.
   let semanticEnabled = localStorage.getItem('ct_semantic') === '1';
   let semanticPairer = null;
-  let semanticStatus = semanticEnabled ? 'off' : 'off';
+  let semanticStatus = 'off';
+  let sharedView = false;
+  let lastRedacted = 0;
 
   const el = (html) => {
     const d = document.createElement('div');
@@ -124,23 +127,23 @@ export function createApp(root) {
       <div class="panel-head">
         <h2>① ${lang === 'en' ? 'Inputs' : '输入'}</h2>
         <div class="row-actions">
-          <button class="ghost sm" id="demoBtn">⚡ Demo</button>
+          <button class="ghost sm" id="demoBtn" ${sharedView ? 'disabled' : ''}>⚡ Demo</button>
           <button class="ghost sm" id="clearBtn">Clear</button>
         </div>
       </div>
 
       <label class="field">
         <span>🤖 ${t(lang, 'inputLabel')}</span>
-        <textarea id="answer" rows="9" >${esc(answerText)}</textarea>
+        <textarea id="answer" rows="9" ${sharedView ? 'readonly' : ''}>${esc(answerText)}</textarea>
       </label>
 
       <label class="field">
         <span>🔍 ${t(lang, 'evidenceLabel')} <em>${lang === 'en' ? 'optional but recommended' : '可选但强烈建议'}</em></span>
-        <textarea id="evidence" rows="8" >${esc(evidenceText)}</textarea>
+        <textarea id="evidence" rows="8" ${sharedView ? 'readonly' : ''}>${esc(evidenceText)}</textarea>
       </label>
 
       <label class="semantic-opt">
-        <input type="checkbox" id="semanticToggle" ${semanticEnabled ? 'checked' : ''} />
+        <input type="checkbox" id="semanticToggle" ${semanticEnabled ? 'checked' : ''} ${sharedView ? 'disabled' : ''} />
         <span>${esc(t(lang, 'semanticToggle'))}</span>
       </label>
       <p class="semantic-note">${esc(t(lang, 'semanticNote'))}</p>
@@ -151,7 +154,7 @@ export function createApp(root) {
           <input type="file" id="file" accept=".jsonl,.md,.txt,.json,.log" hidden />
         </label>
         <span class="file-name" id="fileName"></span>
-        <button class="primary" id="analyzeBtn" ${busy ? 'disabled' : ''}>
+        <button class="primary" id="analyzeBtn" ${busy || sharedView ? 'disabled' : ''}>
           ${busy ? `<span class="spin"></span>${t(lang, 'analyzing')}` : `✦ ${t(lang, 'analyzeBtn')}`}
         </button>
       </div>
@@ -219,6 +222,7 @@ export function createApp(root) {
 
     return `
       <div class="results-anim">
+        ${sharedBanner()}
         <div class="score-hero">
           <div class="score-orb" style="--c:${color}">
             <svg viewBox="0 0 120 120">
@@ -281,10 +285,7 @@ export function createApp(root) {
           ${evidencePane(claims.find(c => c.id === activeClaim))}
         </div>
 
-        <div class="export-row">
-          <button class="ghost" id="copyMd">📄 ${t(lang, 'copyMarkdown')}</button>
-          <button class="ghost" id="dlJson">⬇ ${t(lang, 'exportJSON')}</button>
-        </div>
+        ${exportRow()}
       </div>`;
   }
 
@@ -310,6 +311,7 @@ export function createApp(root) {
     const { claims, stats } = results;
     return `
       <div class="results-anim">
+        ${sharedBanner()}
         <div class="ct-noev">
           <div class="ct-noev-icon">⚪</div>
           <h3>${esc(t(lang, 'noEvidenceTitle'))}</h3>
@@ -329,10 +331,7 @@ export function createApp(root) {
           ${claims.map((c, i) => claimCard(c, i, false)).join('')}
         </div>
 
-        <div class="export-row">
-          <button class="ghost" id="copyMd">📄 ${t(lang, 'copyMarkdown')}</button>
-          <button class="ghost" id="dlJson">⬇ ${t(lang, 'exportJSON')}</button>
-        </div>
+        ${exportRow()}
       </div>`;
   }
 
@@ -394,7 +393,14 @@ export function createApp(root) {
     root.querySelector('#analyzeBtn')?.addEventListener('click', () => run());
     root.querySelector('#demoBtn')?.addEventListener('click', () => run({ skipSync: true, answer: DEMO_ANSWER, evidence: DEMO_EVIDENCE }));
     root.querySelector('#emptyDemo')?.addEventListener('click', () => run({ skipSync: true, answer: DEMO_ANSWER, evidence: DEMO_EVIDENCE }));
-    root.querySelector('#clearBtn')?.addEventListener('click', () => { answerText=''; evidenceText=''; results=null; filter='all'; activeClaim=null; render(); });
+    root.querySelector('#clearBtn')?.addEventListener('click', () => {
+      answerText=''; evidenceText=''; results=null; filter='all'; activeClaim=null;
+      sharedView = false; lastRedacted = 0;
+      if (typeof location !== 'undefined' && location.hash) {
+        try { history.replaceState(null, '', location.pathname + location.search); } catch { /* ignore */ }
+      }
+      render();
+    });
     root.querySelector('#file')?.addEventListener('change', async e => {
       const f = e.target.files?.[0]; if (!f) return;
       evidenceText = await f.text();
@@ -406,12 +412,8 @@ export function createApp(root) {
       await navigator.clipboard.writeText(generateMarkdownReport(results, lang));
       toast(t(lang, 'copied'));
     });
-    root.querySelector('#dlJson')?.addEventListener('click', () => {
-      if (!results) return;
-      const blob = new Blob([generateJSONExport(results, answerText, evidenceText)], { type: 'application/json' });
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `claimtape-${Date.now()}.json`; a.click();
-      toast(t(lang, 'downloaded'));
-    });
+    root.querySelector('#dlJson')?.addEventListener('click', downloadReport);
+    root.querySelector('#shareLink')?.addEventListener('click', () => { copyShareLink(); });
     root.querySelectorAll('.claim').forEach(card => {
       card.addEventListener('click', () => {
         const id = Number(card.dataset.id);
@@ -472,10 +474,75 @@ export function createApp(root) {
     root.querySelector('#copyMd')?.addEventListener('click', async () => {
       await navigator.clipboard.writeText(generateMarkdownReport(results, lang)); toast(t(lang, 'copied'));
     });
-    root.querySelector('#dlJson')?.addEventListener('click', () => {
-      const blob = new Blob([generateJSONExport(results, answerText, evidenceText)], { type: 'application/json' });
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `claimtape-${Date.now()}.json`; a.click();
-    });
+    root.querySelector('#dlJson')?.addEventListener('click', downloadReport);
+    root.querySelector('#shareLink')?.addEventListener('click', () => { copyShareLink(); });
+  }
+
+  function sharedBanner() {
+    if (!sharedView) return '';
+    const count = lastRedacted > 0
+      ? `<div class="share-redact">${esc(String(t(lang, 'redactedCount')).replace('{n}', String(lastRedacted)))}</div>`
+      : '';
+    return `<div class="share-banner" role="status">${esc(t(lang, 'shareBanner'))}${count}</div>`;
+  }
+
+  function exportRow() {
+    return `
+      <div class="export-row">
+        <button class="ghost" id="copyMd">📄 ${t(lang, 'copyMarkdown')}</button>
+        <button class="ghost" id="dlJson">⬇ ${t(lang, 'exportJSON')}</button>
+        ${sharedView ? '' : `<button class="ghost" id="shareLink">🔗 ${t(lang, 'shareLink')}</button>`}
+      </div>`;
+  }
+
+  function downloadReport() {
+    if (!results) return;
+    const blob = new Blob([generateJSONExport(results, answerText, evidenceText)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `claimtape-${Date.now()}.json`; a.click();
+    toast(t(lang, 'downloaded'));
+  }
+
+  async function copyShareLink() {
+    if (!results) return;
+    const origin = (typeof location !== 'undefined' ? (location.origin + location.pathname) : 'https://zijian-ni.github.io/claimtape/');
+    const built = buildShareURL(origin, results, evidenceText);
+    lastRedacted = built.redacted || 0;
+    if (!built.ok) {
+      toast(t(lang, 'shareTooLong'));
+      const panel = root.querySelector('#resultPanel');
+      if (panel) {
+        const note = document.createElement('div');
+        note.className = 'share-too-long';
+        note.innerHTML = `<p>${esc(t(lang, 'shareTooLong'))}</p><button class="primary sm" id="shareDl">${esc(t(lang, 'shareDownloadInstead'))}</button>`;
+        panel.querySelector('.share-too-long')?.remove();
+        panel.appendChild(note);
+        note.querySelector('#shareDl')?.addEventListener('click', downloadReport);
+      }
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(built.url);
+      toast(lastRedacted
+        ? `${t(lang, 'shareCopied')} · ${String(t(lang, 'redactedCount')).replace('{n}', String(lastRedacted))}`
+        : t(lang, 'shareCopied'));
+    } catch {
+      toast(built.url);
+    }
+  }
+
+  function tryRestoreShare() {
+    if (typeof location === 'undefined') return;
+    const hash = location.hash || '';
+    if (!hash || hash === '#') return;
+    const decoded = decodeShareURL(hash);
+    const report = reportFromShare(decoded);
+    if (!report) return;
+    sharedView = true;
+    results = report;
+    evidenceText = decoded.evidence || '';
+    answerText = report.claims.map((c) => c.claim).join('\n');
+    lastRedacted = 0;
+    activeClaim = report.claims[0]?.id ?? null;
   }
 
   function semanticStatusLabel() {
@@ -675,6 +742,7 @@ export function createApp(root) {
     }
   }
 
+  tryRestoreShare();
   render();
 }
 
