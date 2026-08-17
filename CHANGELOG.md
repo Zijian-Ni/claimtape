@@ -5,6 +5,12 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] — 2026-08-17
+
+### Added
+
+- Optional local semantic pairing (off by default). A lazily loaded `transformers.js` MiniLM model can highlight a paraphrased evidence sentence that lexical overlap missed. Pairing only: it never changes a badge, never overrides a numeric or negation conflict, and never invents a competing score. Missing model / offline → silent lexical fallback. Not used by the CLI.
+
 ## [2.0.0] — 2026-08-16
 
 ### Added

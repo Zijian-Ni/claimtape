@@ -8,6 +8,11 @@ import {
 import { negationPolarity, findNumericConflicts } from '../src/polarity.js';
 import { tokenize } from '../src/tokenize.js';
 import { DEMO_ANSWER, DEMO_EVIDENCE } from '../src/demo.js';
+import {
+  applySemanticPairing,
+  loadSemanticPairer,
+  pairerFromEmbedder,
+} from '../src/semantic.js';
 
 let passed = 0, failed = 0;
 const assert = (c, m) => { if (c) { console.log('  ✅', m); passed++; } else { console.error('  ❌', m); failed++; } };
@@ -105,6 +110,76 @@ const q = buildReviewQueue(demo.claims);
 assert(q.length > 0, 'queue non-empty');
 assert(q[0].status === 'contradicted', `conflicts come first, got ${q[0].status}`);
 assert(!q.some(c => c.status === 'supported' && !c.isRisky), 'clean supported claims are not queued');
+
+console.log('\n── CT-A1: optional semantic pairing (highlights only) ──');
+// Tiny bag-of-words embedder so tests never download a model. Paraphrases
+// that share a synonym family land close; unrelated sentences do not.
+function toyEmbed(text) {
+  const families = [
+    ['deploy', 'deployment', 'rollout', 'release'],
+    ['fail', 'failed', 'unsuccessful', 'broke'],
+    ['pass', 'passed', 'success', 'successful'],
+    ['coverage', 'cover'],
+    ['cost', 'price'],
+  ];
+  const vec = new Array(families.length + 1).fill(0);
+  const lower = String(text).toLowerCase();
+  families.forEach((syns, i) => {
+    if (syns.some(s => lower.includes(s))) vec[i] = 1;
+  });
+  vec[families.length] = 0.05; // keep cosine defined on empty text
+  return vec;
+}
+const toyPairer = pairerFromEmbedder(toyEmbed);
+
+const paraphraseAnswer = 'The deploy failed.';
+const paraphraseEvidence = 'The rollout was unsuccessful. Unrelated weather note.';
+const lexicalOnly = analyze(paraphraseAnswer, paraphraseEvidence);
+const paraphraseClaim = lexicalOnly.claims[0];
+assert(paraphraseClaim.status !== 'contradicted', `paraphrase is not a conflict, got ${paraphraseClaim.status}`);
+const lexicalSpans = (paraphraseClaim.spans || []).length;
+
+const semanticOn = structuredClone(lexicalOnly);
+await applySemanticPairing(semanticOn, paraphraseEvidence, toyPairer);
+const paired = semanticOn.claims[0];
+assert(paired.pairSource === 'semantic', `semantic pairing tagged the span, got ${paired.pairSource}`);
+assert(paired.spans?.length > 0, 'paraphrase pair produces a highlight span');
+assert(paired.spans[0].start < paraphraseEvidence.indexOf('weather'), 'span lands on the rollout sentence');
+assert(paired.status === paraphraseClaim.status, 'semantic pairing must not change the badge');
+assert((semanticOn.coverage ?? semanticOn.score) === (lexicalOnly.coverage ?? lexicalOnly.score), 'semantic pairing must not change Evidence Coverage');
+assert(lexicalSpans === 0 || paired.spans.length >= lexicalSpans, 'pairing only adds or keeps spans');
+
+console.log('\n── CT-A1: numeric conflict still wins with pairing on ──');
+const numAnswer = 'coverage 95%';
+const numEvidence = 'coverage: 62%. The rollout was unsuccessful.';
+const numLex = analyze(numAnswer, numEvidence);
+assert(numLex.claims[0].status === 'contradicted', `numeric conflict stays contradicted, got ${numLex.claims[0].status}`);
+assert(numLex.claims[0].conflictKind === 'numeric', 'conflictKind is numeric');
+const numBefore = {
+  status: numLex.claims[0].status,
+  conflictKind: numLex.claims[0].conflictKind,
+  spans: JSON.stringify(numLex.claims[0].spans || []),
+};
+await applySemanticPairing(numLex, numEvidence, toyPairer);
+assert(numLex.claims[0].status === numBefore.status, 'semantic must not soften a numeric conflict');
+assert(numLex.claims[0].conflictKind === 'numeric', 'conflictKind stays numeric');
+assert(numLex.claims[0].pairSource !== 'semantic', 'conflict pairing is not overwritten by the model');
+assert(JSON.stringify(numLex.claims[0].spans || []) === numBefore.spans, 'conflict spans stay on the heuristic passage');
+
+console.log('\n── CT-A1: model-load failure degrades to lexical ──');
+const broken = await loadSemanticPairer({
+  importTransformers: async () => { throw new Error('offline / model missing'); },
+});
+assert(broken === null, 'failed load returns null, does not throw');
+const afterFail = analyze(paraphraseAnswer, paraphraseEvidence);
+await applySemanticPairing(afterFail, paraphraseEvidence, broken);
+assert(afterFail.claims[0].pairSource !== 'semantic', 'null pairer leaves lexical pairing in place');
+assert(afterFail.claims[0].status === lexicalOnly.claims[0].status, 'failed load does not change badges');
+
+const alsoBroken = await loadSemanticPairer({
+  importTransformers: async () => ({ pipeline: undefined }),
+});
+assert(alsoBroken === null, 'missing pipeline() degrades silently');
 
 console.log(`\n── ${passed} passed, ${failed} failed ──\n`);
 if (failed) process.exit(1);

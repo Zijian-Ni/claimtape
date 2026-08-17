@@ -29,7 +29,7 @@ const help = args.includes('--help') || args.includes('-h');
 
 if (help) {
   console.log(`
-ClaimTape CLI v2.0
+ClaimTape CLI v2.1
 Which sentence should you check first?
 
 Usage:
@@ -167,7 +167,7 @@ async function main() {
     console.log();
   });
 
-  console.log(`${dim}─ ClaimTape v2.0 — local, private, no API key. Coverage ≠ truth. ─${reset}\n`);
+  console.log(`${dim}─ ClaimTape v2.1 — local, private, no API key. Coverage ≠ truth. ─${reset}\n`);
 
   // CT-1 / scenario ②: exit non-zero when coverage is low or conflicts exist,
   // so CI can gate on it (documented in the README as the developer workflow).

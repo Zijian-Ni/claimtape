@@ -91,7 +91,14 @@ export const i18n = {
     jumpToEvidence: 'Show in evidence',
     noHighlight: 'This claim matched nothing in the evidence.',
 
-    privacyNote: '🔒 All analysis runs locally in your browser. Nothing is sent to any server.',
+    semanticToggle: 'Local semantic pairing (optional)',
+    semanticNote: 'Improves paraphrase matching only — which passage is highlighted. Never changes badges or Evidence Coverage. Enabling this downloads a small model to this browser on first use; it is the only network request in the suite. Off by default. If the model is missing, pairing falls back to lexical matching.',
+    semanticStatusOn: 'Pairing: local semantic (highlights only)',
+    semanticStatusOff: 'Pairing: lexical',
+    semanticStatusFallback: 'Pairing: lexical (model unavailable)',
+    semanticStatusLoading: 'Loading local pairing model\u2026',
+
+    privacyNote: '🔒 All analysis runs locally in your browser. Nothing is sent to any server. The optional semantic toggle is the only feature that ever downloads a file, and only if you turn it on.',
     footer: 'MIT License · Open Source · Part of the Aurora Evidence Suite',
     demoNote: 'Demo: an Aurora Orchestra project summary (a slightly overclaiming AI answer + the real trace evidence)',
     whoItsFor: 'For: Students · Product Managers · Developers · Parents checking homework AI',
@@ -191,7 +198,14 @@ export const i18n = {
     jumpToEvidence: '在证据中查看',
     noHighlight: '这条声明在证据中没有匹配到任何内容。',
 
-    privacyNote: '🔒 所有分析均在您的浏览器本地运行，不会向任何服务器发送数据。',
+    semanticToggle: '本地语义配对（可选）',
+    semanticNote: '只改善复述配对——高亮哪一段证据。绝不改徽章，也不改证据覆盖率。首次开启会把一个小模型下载到本浏览器缓存，这是整套工具里唯一会访问网络的步骤。默认关闭。模型不可用时自动退回词面匹配。',
+    semanticStatusOn: '配对：本地语义（仅高亮）',
+    semanticStatusOff: '配对：词面匹配',
+    semanticStatusFallback: '配对：词面匹配（模型不可用）',
+    semanticStatusLoading: '正在加载本地配对模型…',
+
+    privacyNote: '🔒 所有分析均在您的浏览器本地运行，不会向任何服务器发送数据。可选的语义配对开关是唯一会下载文件的功能，而且只有你打开它才会发生。',
     footer: 'MIT 许可证 · 开源 · Aurora Evidence Suite 成员',
     demoNote: '示例：Aurora Orchestra 项目摘要（略有夸大的 AI 回答 + 真实追踪证据）',
     whoItsFor: '适用于：学生 · 产品经理 · 开发者 · 检查作业 AI 的家长',

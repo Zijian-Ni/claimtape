@@ -1,6 +1,7 @@
 import './style.css';
 import { t } from './i18n.js';
 import { analyze, generateMarkdownReport, generateJSONExport } from './analyzer.js';
+import { loadSemanticPairer, applySemanticPairing } from './semantic.js';
 import { DEMO_ANSWER, DEMO_EVIDENCE } from './demo.js';
 
 export function createApp(root) {
@@ -12,6 +13,11 @@ export function createApp(root) {
   let activeClaim = null;
   let filter = 'all';
   let particles = [];
+  // CT-A1: optional local semantic PAIRING. Off by default. Never changes
+  // badges or Evidence Coverage — only which evidence passage is highlighted.
+  let semanticEnabled = localStorage.getItem('ct_semantic') === '1';
+  let semanticPairer = null;
+  let semanticStatus = semanticEnabled ? 'off' : 'off';
 
   const el = (html) => {
     const d = document.createElement('div');
@@ -94,7 +100,7 @@ export function createApp(root) {
       <span class="ct-mark">📋</span>
       <div>
         <strong>ClaimTape</strong>
-        <small>evidence-first · v2.0</small>
+        <small>evidence-first · v2.1</small>
       </div>
     </div>
     <div class="ct-nav-actions">
@@ -132,6 +138,12 @@ export function createApp(root) {
         <span>🔍 ${t(lang, 'evidenceLabel')} <em>${lang === 'en' ? 'optional but recommended' : '可选但强烈建议'}</em></span>
         <textarea id="evidence" rows="8" >${esc(evidenceText)}</textarea>
       </label>
+
+      <label class="semantic-opt">
+        <input type="checkbox" id="semanticToggle" ${semanticEnabled ? 'checked' : ''} />
+        <span>${esc(t(lang, 'semanticToggle'))}</span>
+      </label>
+      <p class="semantic-note">${esc(t(lang, 'semanticNote'))}</p>
 
       <div class="toolbar">
         <label class="file-btn">
@@ -243,6 +255,7 @@ export function createApp(root) {
         ${reviewQueueBlock()}
 
         <div class="banner ok">${t(lang, 'evidenceNote')}</div>
+        <p class="semantic-status">${esc(semanticStatusLabel())}</p>
 
         ${riskFlags.length ? `
           <div class="risk-box">
@@ -370,6 +383,14 @@ export function createApp(root) {
     });
     aEl?.addEventListener('input', e => answerText = e.target.value);
     eEl?.addEventListener('input', e => evidenceText = e.target.value);
+    root.querySelector('#semanticToggle')?.addEventListener('change', (e) => {
+      semanticEnabled = !!e.target.checked;
+      localStorage.setItem('ct_semantic', semanticEnabled ? '1' : '0');
+      if (!semanticEnabled) {
+        semanticPairer = null;
+        semanticStatus = 'off';
+      }
+    });
     root.querySelector('#analyzeBtn')?.addEventListener('click', () => run());
     root.querySelector('#demoBtn')?.addEventListener('click', () => run({ skipSync: true, answer: DEMO_ANSWER, evidence: DEMO_EVIDENCE }));
     root.querySelector('#emptyDemo')?.addEventListener('click', () => run({ skipSync: true, answer: DEMO_ANSWER, evidence: DEMO_EVIDENCE }));
@@ -457,6 +478,13 @@ export function createApp(root) {
     });
   }
 
+  function semanticStatusLabel() {
+    if (semanticStatus === 'loading') return t(lang, 'semanticStatusLoading');
+    if (semanticStatus === 'on') return t(lang, 'semanticStatusOn');
+    if (semanticStatus === 'fallback') return t(lang, 'semanticStatusFallback');
+    return t(lang, 'semanticStatusOff');
+  }
+
   function sync() {
     answerText = root.querySelector('#answer')?.value ?? answerText;
     evidenceText = root.querySelector('#evidence')?.value ?? evidenceText;
@@ -473,10 +501,30 @@ export function createApp(root) {
       toast(lang === 'en' ? 'Paste an AI answer first' : '请先粘贴 AI 回答');
       return;
     }
-    busy = true; render();
-    setTimeout(() => {
+    busy = true;
+    if (semanticEnabled) semanticStatus = 'loading';
+    render();
+    setTimeout(async () => {
       try {
         results = analyze(answerText, evidenceText);
+        // CT-A1: pairing only. The heuristic analysis already produced badges
+        // and coverage; we never re-run scoring after this.
+        if (semanticEnabled && results.hasEvidence) {
+          try {
+            if (!semanticPairer) semanticPairer = await loadSemanticPairer();
+            if (semanticPairer) {
+              await applySemanticPairing(results, evidenceText, semanticPairer);
+              semanticStatus = 'on';
+            } else {
+              semanticStatus = 'fallback';
+            }
+          } catch {
+            semanticPairer = null;
+            semanticStatus = 'fallback';
+          }
+        } else {
+          semanticStatus = 'off';
+        }
       } catch (err) {
         busy = false; render();
         toast('Analyze failed: ' + err.message);

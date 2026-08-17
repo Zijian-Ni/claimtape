@@ -131,6 +131,7 @@ Everything runs in your browser:
 3. **Per-claim classification** — token and numeric overlap, negation polarity, same-family numeric conflicts, risky-phrasing patterns
 4. **Evidence Coverage** — a weighted summary of the above; `null` when no evidence was supplied
 5. **Review queue** — conflicts first, then unchecked factual claims, then risky phrasing
+6. **Optional local semantic pairing** — off by default. If you opt in, the browser lazily loads a small sentence-embedding model (`Xenova/all-MiniLM-L6-v2` via `transformers.js`) from its own cache. It only decides *which evidence passage* a paraphrase is highlighted against. It never changes a badge, never overrides a numeric or negation conflict, and never invents a score that competes with Evidence Coverage. If the model is missing or the tab is offline, pairing falls back to the lexical path with no error. This is the only network request in the whole suite, and it never runs unless you turn the toggle on. The CLI does not load it.
 
 **No heuristic is perfect.** ClaimTape is triage, not judgment. Use it to decide where to spend your attention.
 
@@ -139,6 +140,8 @@ Everything runs in your browser:
 ## Privacy
 
 **Everything runs locally in your browser.** No data leaves the page. No API key, no telemetry, no cookies, no backend. You can verify this by opening the network tab, or by loading the page and then going offline.
+
+The one exception is the **optional** semantic-pairing toggle. It is off by default. Turning it on downloads a small embedding model into this browser's cache on first use so paraphrase matching can run offline afterwards. That download is the only network request in the Aurora Evidence Suite. Disable the toggle (or never enable it) and the page stays fully offline.
 
 ---
 
@@ -168,6 +171,8 @@ npm run build     # → dist/, ready for GitHub Pages
 - **数值矛盾**：「覆盖率 95%」对上证据「覆盖率：62%」，共享 `覆盖率` 一词就被当成支撑。现在同指标家族内数值相差超过 15% 直接判冲突。
 - **跨指标误判**：成本降幅 80% 和覆盖率 78.4% 是两个毫不相干的数字，但长得像。现在明确禁止跨家族比较——这是 v1.4 真实出现过的误报，已有回归测试。
 - **中文分词**：中文没有空格，旧分词器把「系统已经上线」当成一个 token，匹配不到任何东西，导致**每一条中文声明都是零覆盖率并被标记**。现在用 `Intl.Segmenter`，降级方案是字符 bigram。
+
+**可选的本地语义配对**（默认关闭）：只改善「声明高亮到哪一段证据」。它**不改徽章、不改证据覆盖率、不把数值/否定冲突改成一致**。首次开启会把一个小模型下载到本浏览器缓存——这是整套工具里唯一会访问网络的步骤。模型加载失败或离线时静默退回词面匹配。CLI 完全不加载它。
 
 ---
 

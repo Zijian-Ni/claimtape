@@ -816,7 +816,7 @@ export function analyze(answerText, evidenceText) {
     factCount: evidence.facts.length,
     mode,
     summary,
-    version: '2.0.0',
+    version: '2.1.0',
     metric: 'evidence-coverage',
     disclaimer: hasEvidence
       ? 'Coverage measures evidence match, not truth. Offline heuristics: high precision on explicit conflicts, no guarantee of correctness.'
@@ -843,7 +843,7 @@ export function generateMarkdownReport(results) {
   md += coverage == null
     ? `**Evidence Coverage:** n/a — no evidence supplied  \n`
     : `**Evidence Coverage:** ${coverage}/100  \n`;
-  md += `**Mode:** ${mode}  \n**Evidence:** ${hasEvidence ? 'yes' : 'no'}  \n**Engine:** v2.0\n\n`;
+  md += `**Mode:** ${mode}  \n**Evidence:** ${hasEvidence ? 'yes' : 'no'}  \n**Engine:** v2.1\n\n`;
   md += `> ${summary}\n\n`;
   md += `> ⚠️ ${disclaimer}\n\n`;
 
@@ -872,14 +872,14 @@ export function generateMarkdownReport(results) {
     }
     md += '\n';
   }
-  return md + `\n---\n*ClaimTape v2.0 — local report. Coverage measures evidence match, not truth.*\n`;
+  return md + `\n---\n*ClaimTape v2.1 — local report. Coverage measures evidence match, not truth.*\n`;
 }
 
 export function generateJSONExport(results, answerText, evidenceText) {
   return JSON.stringify({
     meta: {
       tool: 'ClaimTape',
-      version: '2.0.0',
+      version: '2.1.0',
       metric: 'evidence-coverage',
       generated: new Date().toISOString(),
     },

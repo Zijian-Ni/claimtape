@@ -431,3 +431,16 @@ textarea:focus { border-color: rgba(56,189,248,.5); box-shadow: 0 0 0 3px rgba(5
 @media (prefers-reduced-motion: reduce) {
   .ct-evidence-pane { scroll-behavior: auto; }
 }
+
+/* ── CT-A1: optional local semantic pairing. Off by default. ── */
+.semantic-opt {
+  display: flex; gap: 8px; align-items: center;
+  margin: 10px 0 4px; font-size: 13px; color: var(--text); cursor: pointer;
+}
+.semantic-opt input { accent-color: var(--teal); }
+.semantic-note {
+  margin: 0 0 8px; color: var(--muted); font-size: 11.5px; line-height: 1.55;
+}
+.semantic-status {
+  margin: 6px 0 10px; color: var(--muted); font-size: 12px;
+}
