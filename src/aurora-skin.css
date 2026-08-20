@@ -1,0 +1,161 @@
+/* ============================================================
+   AURORA SKIN · Theme A「示波 / Instrument」 — claimtape
+   Loaded AFTER style.css. Evidence = signal: phosphor trace,
+   mm-grid, sweep scanline, crosshair panels.
+   ============================================================ */
+
+:root {
+  --bg: #05080a;
+  --panel: #0a1014;
+  --panel2: #0d151b;
+  --line: rgba(120, 255, 214, .13);
+  --text: #dce8ea;
+  --muted: #7d93a0;
+  --teal: #5cffc9;          /* phosphor — the one accent */
+  --cyan: #5cffc9;
+  --violet: #9d8cff;        /* secondary signal */
+  --pink: #9d8cff;
+  --amber: #ffb454;
+  --rose: #ff6b7d;
+  --radius: 8px;
+  --font: "IBM Plex Sans", Inter, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ---- kill the old blur-orb look ---- */
+.ct-orb { display: none; }
+html[data-bg="midnight"], html[data-bg="midnight"] body { --bg: #04070d; }
+html[data-bg="nebula"],  html[data-bg="nebula"]  body { --bg: #070510; }
+html[data-bg="ember"],   html[data-bg="ember"]   body { --bg: #0a0705; }
+
+/* ---- injected effect layers (see aurora-skin.js) ---- */
+.ak-grid {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    linear-gradient(rgba(120, 200, 220, .045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120, 200, 220, .045) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 95% 75% at 50% 0%, #000 25%, transparent 100%);
+}
+.ak-scan {
+  position: fixed; left: 0; right: 0; top: -2px; height: 1px; z-index: 3; pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--teal), transparent);
+  box-shadow: 0 0 18px rgba(92, 255, 201, .5);
+  opacity: 0;
+  animation: akScan 8s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+@keyframes akScan {
+  0%   { transform: translateY(0);    opacity: 0; }
+  6%   { opacity: .5; }
+  90%  { opacity: .5; }
+  100% { transform: translateY(100vh); opacity: 0; }
+}
+
+/* ---- typography: instrument voice ---- */
+.ct-hero h1 {
+  font-family: "Space Grotesk", var(--font);
+  font-weight: 700; letter-spacing: -.02em;
+  background: none; color: var(--text); -webkit-text-fill-color: currentColor;
+}
+.ct-hero h1 .hl,
+.ct-hero h1 em,
+.ct-hero h1 b {
+  color: var(--teal);
+  text-shadow: 0 0 26px rgba(92, 255, 201, .4);
+}
+.eyebrow {
+  font-family: var(--mono); letter-spacing: .22em; border-radius: 3px;
+  color: var(--teal); border-color: rgba(92, 255, 201, .3); background: rgba(92, 255, 201, .06);
+}
+.eyebrow::before { content: "▸ "; }
+.ct-brand strong { font-family: "Space Grotesk", var(--font); }
+.ct-brand small { font-family: var(--mono); }
+
+/* ---- brand mark: gradient chip → pulsing phosphor dot ---- */
+.ct-mark {
+  border-radius: 6px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  box-shadow: inset 0 0 14px rgba(92, 255, 201, .18), 0 0 16px rgba(92, 255, 201, .12);
+  color: var(--teal);
+  animation: akPulse 2.6s ease infinite;
+}
+@keyframes akPulse { 0%, 100% { box-shadow: inset 0 0 14px rgba(92,255,201,.18), 0 0 16px rgba(92,255,201,.12); } 50% { box-shadow: inset 0 0 14px rgba(92,255,201,.32), 0 0 26px rgba(92,255,201,.3); } }
+
+/* ---- chrome: nav / buttons / chips ---- */
+.ct-nav {
+  background: linear-gradient(180deg, rgba(5, 8, 10, .92), rgba(5, 8, 10, .4));
+  border-bottom: 1px solid var(--line);
+}
+.ghost, .file-btn, .chip {
+  border-radius: 4px; background: rgba(255, 255, 255, .02);
+  font-family: var(--mono); font-size: 13px;
+}
+.ghost:hover, .chip:hover, .file-btn:hover {
+  border-color: rgba(92, 255, 201, .5); color: var(--teal);
+  transform: none; background: rgba(92, 255, 201, .05);
+}
+.primary {
+  border-radius: 4px; font-family: var(--mono); letter-spacing: .04em;
+  color: #04110c; background: var(--teal);
+  box-shadow: 0 0 0 1px var(--teal), 0 8px 30px rgba(92, 255, 201, .22);
+}
+.primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 1px var(--teal), 0 14px 40px rgba(92, 255, 201, .4);
+}
+.pills span { border-radius: 3px; font-family: var(--mono); font-size: 11px; letter-spacing: .06em; }
+
+/* ---- panels: glass → solid instrument bay + crosshair corners ---- */
+.panel {
+  background: var(--panel);
+  backdrop-filter: none;
+  box-shadow: none;
+  border-radius: var(--radius);
+  position: relative;
+  transition: background .25s ease, border-color .25s ease;
+}
+.panel:hover { background: var(--panel2); border-color: rgba(92, 255, 201, .22); }
+.ak-x {
+  position: absolute; width: 11px; height: 11px; pointer-events: none;
+  opacity: 0; transition: opacity .25s ease;
+}
+.ak-x::before, .ak-x::after { content: ""; position: absolute; background: var(--teal); }
+.ak-x::before { width: 11px; height: 1px; }
+.ak-x::after  { width: 1px;  height: 11px; }
+.ak-x.tl { top: 10px; left: 10px; }
+.ak-x.br { bottom: 10px; right: 10px; }
+.ak-x.br::before { right: 0; bottom: 0; }
+.ak-x.br::after  { right: 0; bottom: 0; }
+.panel:hover .ak-x { opacity: 1; }
+
+.panel-head h2, .claims-head h3 {
+  font-family: "Space Grotesk", var(--font); letter-spacing: .05em; text-transform: uppercase; font-size: 13px;
+}
+.panel-head h2::before, .claims-head h3::before {
+  content: "● "; color: var(--teal); font-size: 9px; vertical-align: 2px;
+  animation: akPulse2 2s ease infinite;
+}
+@keyframes akPulse2 { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
+/* ---- inputs ---- */
+textarea, input, select {
+  border-radius: 4px; background: rgba(3, 6, 8, .8);
+  font-family: var(--mono); font-size: 13px;
+}
+textarea:focus, input:focus, select:focus {
+  border-color: rgba(92, 255, 201, .55);
+  box-shadow: 0 0 0 3px rgba(92, 255, 201, .1);
+}
+.field span { font-family: var(--mono); letter-spacing: .12em; }
+.field em { color: var(--teal); }
+
+/* ---- links / footer ---- */
+a { color: var(--teal); }
+.ct-foot { border-top: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
+
+/* ---- motion safety ---- */
+@media (prefers-reduced-motion: reduce) {
+  .ak-scan { display: none; }
+  .ct-mark, .panel-head h2::before, .claims-head h3::before { animation: none; }
+}
